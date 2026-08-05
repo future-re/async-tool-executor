@@ -1,6 +1,6 @@
 use crate::support::tools::{BlockingProbeTool, CooperativeBlockingTool};
 use crate::support::{config, request};
-use async_tool_executor::{ExecutionOptions, ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_core::{ExecutionOptions, ExecutorConfig, ToolExecutor, ToolRegistry};
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

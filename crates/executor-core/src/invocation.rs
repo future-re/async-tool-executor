@@ -80,7 +80,11 @@ async fn invoke_inner(
         );
     }
 
-    if let Err(error) = tool.implementation.validate(&request.arguments, context).await {
+    if let Err(error) = tool
+        .implementation
+        .validate(&request.arguments, context)
+        .await
+    {
         return fail_with(
             config.diagnostics.as_deref(),
             request,

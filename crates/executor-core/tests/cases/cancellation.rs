@@ -1,6 +1,6 @@
 use crate::support::tools::{CountingTool, HoldingTool, ProbeTool};
 use crate::support::{config, request};
-use async_tool_executor::{ExecutionOptions, ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_core::{ExecutionOptions, ExecutorConfig, ToolExecutor, ToolRegistry};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

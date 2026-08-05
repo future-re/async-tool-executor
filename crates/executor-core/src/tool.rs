@@ -47,6 +47,16 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+impl From<&ToolDefinition> for crate::ToolDescriptor {
+    fn from(definition: &ToolDefinition) -> Self {
+        Self {
+            name: definition.name.clone(),
+            description: definition.description.clone(),
+            input_schema: definition.input_schema.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
     pub content: Value,

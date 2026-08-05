@@ -1,5 +1,5 @@
-use async_tool_executor::{ExecutionError, Tool, ToolContext, ToolDefinition, ToolOutput};
 use async_trait::async_trait;
+use executor_core::{ExecutionError, Tool, ToolContext, ToolDefinition, ToolOutput};
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

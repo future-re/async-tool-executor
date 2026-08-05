@@ -1,7 +1,7 @@
 pub mod sinks;
 pub mod tools;
 
-use async_tool_executor::{ExecutionRequest, ExecutorConfig};
+use executor_core::{ExecutionRequest, ExecutorConfig};
 
 pub fn request(id: impl Into<String>, tool: &str) -> ExecutionRequest {
     ExecutionRequest {

@@ -70,6 +70,17 @@ impl ToolRegistry {
         Ok(self.resolve(name)?.definition)
     }
 
+    /// Returns a deterministic snapshot suitable for capability discovery.
+    pub fn list(&self) -> Vec<crate::ToolDescriptor> {
+        let mut definitions = self
+            .tools
+            .values()
+            .map(|tool| crate::ToolDescriptor::from(tool.definition.as_ref()))
+            .collect::<Vec<_>>();
+        definitions.sort_by(|left, right| left.name.cmp(&right.name));
+        definitions
+    }
+
     pub(crate) fn resolve(&self, name: &str) -> Result<RegisteredTool, ExecutionError> {
         self.tools
             .get(name)

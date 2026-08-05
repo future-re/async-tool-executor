@@ -1,15 +1,37 @@
-[package]
-name = "async-tool-executor"
+[workspace]
+resolver = "3"
+members = [
+    "crates/executor-core",
+    "crates/executor-protocol",
+    "crates/windows-agent-client",
+    "crates/wsl-executor-daemon",
+    "crates/wsl-runtime",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
-[dependencies]
+[workspace.dependencies]
 async-trait = "0.1"
 futures-util = "0.3"
 jsonschema = "0.48.0"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = [
+    "io-std",
+    "io-util",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"

@@ -8,7 +8,6 @@ mod executor;
 mod invocation;
 mod observer;
 mod registry;
-mod request;
 mod scheduler;
 mod tool;
 
@@ -16,7 +15,7 @@ pub use config::ExecutorConfig;
 pub use diagnostics::{DiagnosticsSink, ExecutionFailure, FailureKind};
 pub use error::ExecutionError;
 pub use executor::{ExecutionOptions, ToolExecutor};
+pub use executor_protocol::{ExecutionRequest, ExecutionResult, ToolDescriptor};
 pub use observer::{ExecutionEvent, ExecutionObserver, ProgressReporter};
 pub use registry::ToolRegistry;
-pub use request::{ExecutionRequest, ExecutionResult};
 pub use tool::{Tool, ToolContext, ToolDefinition, ToolOutput};

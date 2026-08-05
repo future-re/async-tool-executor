@@ -1,9 +1,9 @@
 use crate::support::{config, request};
-use async_tool_executor::{
+use async_trait::async_trait;
+use executor_core::{
     ExecutionError, ExecutionOptions, ExecutionRequest, Tool, ToolContext, ToolDefinition,
     ToolExecutor, ToolOutput, ToolRegistry,
 };
-use async_trait::async_trait;
 use serde_json::{Value, json};
 
 struct StrictTool;

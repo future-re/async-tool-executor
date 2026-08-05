@@ -18,3 +18,11 @@ pub struct ExecutionResult {
     pub content: Value,
     pub is_error: bool,
 }
+
+/// Serializable tool metadata returned during capability discovery.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolDescriptor {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}

@@ -1,7 +1,7 @@
 use crate::support::sinks::{MemoryDiagnostics, MemoryObserver};
 use crate::support::tools::{FailingTool, ProgressTool};
 use crate::support::{config, request};
-use async_tool_executor::{
+use executor_core::{
     ExecutionEvent, ExecutionOptions, ExecutorConfig, FailureKind, ToolExecutor, ToolRegistry,
 };
 use std::sync::Arc;

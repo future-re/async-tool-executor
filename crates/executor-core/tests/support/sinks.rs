@@ -1,6 +1,4 @@
-use async_tool_executor::{
-    DiagnosticsSink, ExecutionEvent, ExecutionFailure, ExecutionObserver,
-};
+use executor_core::{DiagnosticsSink, ExecutionEvent, ExecutionFailure, ExecutionObserver};
 use std::sync::Mutex;
 
 #[derive(Default)]
