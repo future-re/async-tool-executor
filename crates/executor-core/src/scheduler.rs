@@ -1,8 +1,8 @@
-use crate::diagnostics::FailureKind;
 use crate::invocation::{error_result, fail_with, invoke};
 use crate::observer::{ExecutionEvent, ExecutionObserver, ProgressReporter, notify};
 use crate::{
-    ExecutionOptions, ExecutionRequest, ExecutionResult, ExecutorConfig, ToolContext, ToolRegistry,
+    ExecutionError, ExecutionRequest, ExecutionResult, ExecutorConfig, SubmissionControls,
+    ToolContext, ToolRegistry,
 };
 use futures_util::FutureExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -70,11 +70,15 @@ impl ExecutionRuntime {
         self.observer = Some(observer);
         self
     }
+
+    pub(crate) fn observer(&self) -> Option<&dyn ExecutionObserver> {
+        self.observer.as_deref()
+    }
 }
 
 pub(crate) async fn execute_one(
     request: ExecutionRequest,
-    options: ExecutionOptions,
+    options: SubmissionControls,
     runtime: ExecutionRuntime,
 ) -> ExecutionResult {
     let concurrent = is_concurrent(&request, &runtime.tools);
@@ -90,7 +94,7 @@ pub(crate) async fn execute_one(
 
 pub(crate) async fn execute_all(
     requests: Vec<ExecutionRequest>,
-    options: ExecutionOptions,
+    options: SubmissionControls,
     runtime: ExecutionRuntime,
 ) -> Vec<ExecutionResult> {
     let mut active = requests
@@ -127,7 +131,7 @@ fn is_concurrent(request: &ExecutionRequest, tools: &ToolRegistry) -> bool {
 async fn run_isolated(
     prepared: PreparedExecution,
     runtime: ExecutionRuntime,
-    options: ExecutionOptions,
+    options: SubmissionControls,
     exclusive: bool,
 ) -> IndexedResult {
     let index = prepared.index;
@@ -141,32 +145,30 @@ async fn run_isolated(
     let permit = match acquire_permit(runtime.pool.clone(), exclusive, &context).await {
         Ok(permit) => permit,
         Err(QueueExit::TimedOut) => {
-            let message = "execution deadline exceeded while queued";
             context.cancellation.cancel();
             return IndexedResult {
                 index,
                 result: fail_with(
-                    runtime.config.diagnostics.as_deref(),
+                    runtime.observer(),
                     &request,
                     &context,
-                    FailureKind::TimedOut,
-                    "timed_out",
-                    message,
+                    ExecutionError::TimedOut {
+                        message: "execution deadline exceeded while queued".into(),
+                    },
                 ),
             };
         }
         Err(QueueExit::Cancelled) => {
-            let message = "execution cancelled while queued";
             context.cancellation.cancel();
             return IndexedResult {
                 index,
                 result: fail_with(
-                    runtime.config.diagnostics.as_deref(),
+                    runtime.observer(),
                     &request,
                     &context,
-                    FailureKind::Cancelled,
-                    "cancelled",
-                    message,
+                    ExecutionError::Cancelled {
+                        message: "execution cancelled while queued".into(),
+                    },
                 ),
             };
         }
@@ -177,7 +179,7 @@ async fn run_isolated(
             };
         }
     };
-    context.deadline = effective_deadline(options.deadline, runtime.config.tool_timeout);
+    context.deadline = effective_deadline(options.deadline(), runtime.config.tool_timeout);
     let panic_request = request.clone();
     let panic_context = context.clone();
     let outcome = AssertUnwindSafe(run_prepared(request, context, runtime.clone()))
@@ -198,12 +200,10 @@ async fn run_isolated(
                 "tool execution panicked: {message}"
             );
             fail_with(
-                runtime.config.diagnostics.as_deref(),
+                runtime.observer(),
                 &panic_request,
                 &panic_context,
-                FailureKind::Panic,
-                "execution_panic",
-                message,
+                ExecutionError::Panicked(message),
             )
         }
     };
@@ -256,14 +256,7 @@ async fn run_prepared(
     let tool = match runtime.tools.resolve(&request.tool) {
         Ok(tool) => tool,
         Err(error) => {
-            return fail_with(
-                runtime.config.diagnostics.as_deref(),
-                &request,
-                &context,
-                FailureKind::NotFound,
-                "tool_not_found",
-                error.to_string(),
-            );
+            return fail_with(runtime.observer(), &request, &context, error);
         }
     };
 
@@ -275,21 +268,21 @@ async fn run_prepared(
             detail: tool.implementation.invocation_detail(&request.arguments),
         },
     );
-    invoke(&request, &tool, context, &runtime.config).await
+    invoke(&request, &tool, context, &runtime).await
 }
 
 fn tool_context(
     request: &ExecutionRequest,
     config: &ExecutorConfig,
-    options: &ExecutionOptions,
+    options: &SubmissionControls,
     observer: Option<Arc<dyn ExecutionObserver>>,
 ) -> ToolContext {
     ToolContext {
         execution_id: request.id.clone(),
         cwd: config.cwd.clone(),
         env: Arc::clone(&config.env),
-        deadline: options.deadline,
-        cancellation: options.cancellation.child_token(),
+        deadline: options.deadline(),
+        cancellation: options.cancellation().child_token(),
         progress: ProgressReporter::new(observer, request.id.clone(), request.tool.clone()),
     }
 }

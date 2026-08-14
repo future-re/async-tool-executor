@@ -1,4 +1,3 @@
-use crate::DiagnosticsSink;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +10,6 @@ pub struct ExecutorConfig {
     pub env: Arc<HashMap<String, String>>,
     pub tool_timeout: Option<Duration>,
     pub concurrency_limit: usize,
-    pub diagnostics: Option<Arc<dyn DiagnosticsSink>>,
 }
 
 impl Default for ExecutorConfig {
@@ -21,7 +19,6 @@ impl Default for ExecutorConfig {
             env: Arc::new(HashMap::new()),
             tool_timeout: None,
             concurrency_limit: 1,
-            diagnostics: None,
         }
     }
 }

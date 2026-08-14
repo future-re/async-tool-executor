@@ -1,6 +1,6 @@
 use crate::support::tools::{CountingTool, ExclusiveProbeTool, HoldingTool, ProbeTool};
 use crate::support::{config, request};
-use executor_core::{ExecutionOptions, ToolExecutor, ToolRegistry};
+use executor_core::{SubmissionControls, ToolExecutor, ToolRegistry};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -22,7 +22,7 @@ async fn concurrent_tools_respect_the_limit_and_result_order() {
         .collect();
 
     let results = executor
-        .execute_all(requests, ExecutionOptions::new())
+        .execute_all(requests, SubmissionControls::new())
         .await;
 
     assert_eq!(results.len(), 7);
@@ -52,8 +52,8 @@ async fn concurrent_submissions_share_the_executor_limit() {
         .collect();
 
     let (left, right) = tokio::join!(
-        executor.execute_all(left, ExecutionOptions::new()),
-        executor.execute_all(right, ExecutionOptions::new()),
+        executor.execute_all(left, SubmissionControls::new()),
+        executor.execute_all(right, SubmissionControls::new()),
     );
 
     assert_eq!(left.len() + right.len(), 8);
@@ -78,8 +78,8 @@ async fn unsafe_tool_is_exclusive_across_submissions() {
     let executor = ToolExecutor::new(tools, config(3));
 
     let (parallel, exclusive) = tokio::join!(
-        executor.execute(request("parallel", "probe"), ExecutionOptions::new()),
-        executor.execute(request("exclusive", "exclusive"), ExecutionOptions::new()),
+        executor.execute(request("parallel", "probe"), SubmissionControls::new()),
+        executor.execute(request("exclusive", "exclusive"), SubmissionControls::new()),
     );
 
     assert!(!parallel.is_error);
@@ -111,7 +111,7 @@ async fn queued_exclusive_tool_prevents_later_parallel_work_from_bypassing_it() 
         let executor = executor.clone();
         async move {
             executor
-                .execute(request("holder", "hold"), ExecutionOptions::new())
+                .execute(request("holder", "hold"), SubmissionControls::new())
                 .await
         }
     });
@@ -120,7 +120,7 @@ async fn queued_exclusive_tool_prevents_later_parallel_work_from_bypassing_it() 
         let executor = executor.clone();
         async move {
             executor
-                .execute(request("exclusive", "exclusive"), ExecutionOptions::new())
+                .execute(request("exclusive", "exclusive"), SubmissionControls::new())
                 .await
         }
     });
@@ -129,7 +129,7 @@ async fn queued_exclusive_tool_prevents_later_parallel_work_from_bypassing_it() 
         let executor = executor.clone();
         async move {
             executor
-                .execute(request("later", "count"), ExecutionOptions::new())
+                .execute(request("later", "count"), SubmissionControls::new())
                 .await
         }
     });

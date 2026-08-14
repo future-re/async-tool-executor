@@ -1,10 +1,9 @@
-use executor_core::{ExecutionOptions, ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_core::{ExecutorConfig, SubmissionControls, ToolExecutor, ToolRegistry};
 use executor_protocol::ExecutionRequest;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use wsl_runtime::{
     CommandOutput, CommandSpec, NativeShell, NativeShellConfig, ResourceLimits, Shell, ShellTool,
@@ -197,7 +196,7 @@ async fn shell_tool_returns_structured_results_through_the_executor() {
                 arguments: json!({"argv": ["echo", "hello"]}),
                 ..request("s1", "shell")
             },
-            ExecutionOptions::new(),
+            SubmissionControls::new(),
         )
         .await;
     assert!(!result.is_error);
@@ -217,7 +216,7 @@ async fn shell_tool_nonzero_exit_is_a_result_not_an_error() {
                 arguments: json!({"argv": ["/bin/sh", "-c", "exit 3"]}),
                 ..request("s2", "shell")
             },
-            ExecutionOptions::new(),
+            SubmissionControls::new(),
         )
         .await;
     assert!(!result.is_error);
@@ -236,7 +235,7 @@ async fn shell_tool_spawn_failure_is_an_execution_error() {
                 arguments: json!({"argv": ["/no/such/program"]}),
                 ..request("s3", "shell")
             },
-            ExecutionOptions::new(),
+            SubmissionControls::new(),
         )
         .await;
     assert!(result.is_error);
@@ -262,7 +261,7 @@ async fn executor_timeout_kills_the_spawned_process_tree() {
                 arguments: json!({"argv": ["/bin/sh", "-c", script]}),
                 ..request("t1", "shell")
             },
-            ExecutionOptions::new().with_deadline(Instant::now() + Duration::from_millis(400)),
+            SubmissionControls::new().with_timeout(Duration::from_millis(400)),
         )
         .await;
     assert!(result.is_error);

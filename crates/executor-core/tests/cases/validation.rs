@@ -1,7 +1,7 @@
 use crate::support::{config, request};
 use async_trait::async_trait;
 use executor_core::{
-    ExecutionError, ExecutionOptions, ExecutionRequest, Tool, ToolContext, ToolDefinition,
+    ExecutionError, ExecutionRequest, SubmissionControls, Tool, ToolContext, ToolDefinition,
     ToolExecutor, ToolOutput, ToolRegistry,
 };
 use serde_json::{Value, json};
@@ -46,7 +46,7 @@ async fn arguments_matching_the_schema_pass() {
                 arguments: json!({"amount": 10}),
                 ..request("v1", "strict")
             },
-            ExecutionOptions::new(),
+            SubmissionControls::new(),
         )
         .await;
     assert!(!result.is_error);
@@ -66,7 +66,7 @@ async fn arguments_violating_the_schema_fail_without_invoking_the_tool() {
                     arguments,
                     ..request("bad", "strict")
                 },
-                ExecutionOptions::new(),
+                SubmissionControls::new(),
             )
             .await;
         assert!(result.is_error);

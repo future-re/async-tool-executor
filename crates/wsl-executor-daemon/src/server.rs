@@ -1,5 +1,5 @@
 use executor_core::{
-    ExecutionEvent, ExecutionObserver, ExecutionOptions, ToolDescriptor, ToolExecutor,
+    ExecutionEvent, ExecutionObserver, SubmissionControls, ToolDescriptor, ToolExecutor,
 };
 use executor_protocol::{
     ClientMessage, DEFAULT_MAX_FRAME_SIZE, FrameError, PROTOCOL_VERSION, ProtocolFailure,
@@ -11,7 +11,6 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +47,14 @@ impl ExecutionObserver for WireObserver {
                 tool,
                 message,
                 data,
+            },
+            ExecutionEvent::Failed {
+                execution_id,
+                error,
+                ..
+            } => ServerMessage::Failed {
+                execution_id: Some(execution_id),
+                error: ProtocolFailure::new(error.code(), error.to_string()),
             },
         };
         let _ = self.responses.send(message);
@@ -143,10 +150,9 @@ where
                 let responses = responses.clone();
                 let active = Arc::clone(&active);
                 executions.spawn(async move {
-                    let mut options = ExecutionOptions::new().with_cancellation(cancellation);
+                    let mut options = SubmissionControls::new().with_cancellation(cancellation);
                     if let Some(timeout_ms) = timeout_ms {
-                        options = options
-                            .with_deadline(Instant::now() + Duration::from_millis(timeout_ms));
+                        options = options.with_timeout(Duration::from_millis(timeout_ms));
                     }
                     let result = executor.execute(request, options).await;
                     active

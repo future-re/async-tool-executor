@@ -1,6 +1,6 @@
 use crate::support::tools::{BlockingProbeTool, CooperativeBlockingTool};
 use crate::support::{config, request};
-use executor_core::{ExecutionOptions, ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_core::{ExecutorConfig, SubmissionControls, ToolExecutor, ToolRegistry};
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +23,7 @@ async fn run_blocking_does_not_block_the_async_runtime_and_maps_failures() {
     };
 
     let (success, ()) = tokio::join!(
-        executor.execute(request("blocking", "blocking"), ExecutionOptions::new()),
+        executor.execute(request("blocking", "blocking"), SubmissionControls::new()),
         timer,
     );
     assert_eq!(success.content, Value::Bool(true));
@@ -31,7 +31,7 @@ async fn run_blocking_does_not_block_the_async_runtime_and_maps_failures() {
     let mut error_request = request("blocking-error", "blocking");
     error_request.arguments = serde_json::json!({"error": true});
     let error = executor
-        .execute(error_request, ExecutionOptions::new())
+        .execute(error_request, SubmissionControls::new())
         .await;
     assert!(error.is_error);
     assert!(
@@ -44,7 +44,7 @@ async fn run_blocking_does_not_block_the_async_runtime_and_maps_failures() {
     let mut panic_request = request("blocking-panic", "blocking");
     panic_request.arguments = serde_json::json!({"panic": true});
     let panic = executor
-        .execute(panic_request, ExecutionOptions::new())
+        .execute(panic_request, SubmissionControls::new())
         .await;
     assert!(panic.is_error);
     assert!(panic.content.to_string().contains("blocking worker failed"));
@@ -68,7 +68,7 @@ async fn blocking_work_receives_cooperative_cancellation_after_timeout() {
     let result = executor
         .execute(
             request("cooperative", "cooperative-blocking"),
-            ExecutionOptions::new(),
+            SubmissionControls::new(),
         )
         .await;
     tokio::time::timeout(Duration::from_millis(100), async {

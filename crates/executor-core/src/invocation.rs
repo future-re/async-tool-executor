@@ -1,6 +1,7 @@
-use crate::diagnostics::{DiagnosticsSink, FailureKind, record_failure};
+use crate::observer::{ExecutionEvent, notify};
 use crate::registry::RegisteredTool;
-use crate::{ExecutionRequest, ExecutionResult, ExecutorConfig, ToolContext};
+use crate::scheduler::ExecutionRuntime;
+use crate::{ExecutionError, ExecutionObserver, ExecutionRequest, ExecutionResult, ToolContext};
 use serde_json::json;
 use tokio::time::sleep_until;
 
@@ -8,9 +9,9 @@ pub(crate) async fn invoke(
     request: &ExecutionRequest,
     tool: &RegisteredTool,
     context: ToolContext,
-    config: &ExecutorConfig,
+    runtime: &ExecutionRuntime,
 ) -> ExecutionResult {
-    let operation = invoke_inner(request, tool, &context, config);
+    let operation = invoke_inner(request, tool, &context, runtime);
     tokio::pin!(operation);
 
     enum Outcome<T> {
@@ -37,27 +38,25 @@ pub(crate) async fn invoke(
     match outcome {
         Outcome::Completed(result) => result,
         Outcome::TimedOut => {
-            let message = "execution deadline exceeded";
             context.cancellation.cancel();
             fail_with(
-                config.diagnostics.as_deref(),
+                runtime.observer(),
                 request,
                 &context,
-                FailureKind::TimedOut,
-                "timed_out",
-                message,
+                ExecutionError::TimedOut {
+                    message: "execution deadline exceeded".into(),
+                },
             )
         }
         Outcome::Cancelled => {
-            let message = "execution cancelled";
             context.cancellation.cancel();
             fail_with(
-                config.diagnostics.as_deref(),
+                runtime.observer(),
                 request,
                 &context,
-                FailureKind::Cancelled,
-                "cancelled",
-                message,
+                ExecutionError::Cancelled {
+                    message: "execution cancelled".into(),
+                },
             )
         }
     }
@@ -67,17 +66,10 @@ async fn invoke_inner(
     request: &ExecutionRequest,
     tool: &RegisteredTool,
     context: &ToolContext,
-    config: &ExecutorConfig,
+    runtime: &ExecutionRuntime,
 ) -> ExecutionResult {
     if let Err(error) = tool.validate_arguments(&request.arguments) {
-        return fail_with(
-            config.diagnostics.as_deref(),
-            request,
-            context,
-            FailureKind::Validation,
-            "validation_error",
-            error.to_string(),
-        );
+        return fail_with(runtime.observer(), request, context, error);
     }
 
     if let Err(error) = tool
@@ -85,14 +77,7 @@ async fn invoke_inner(
         .validate(&request.arguments, context)
         .await
     {
-        return fail_with(
-            config.diagnostics.as_deref(),
-            request,
-            context,
-            FailureKind::Validation,
-            "validation_error",
-            error.to_string(),
-        );
+        return fail_with(runtime.observer(), request, context, error);
     }
 
     let span = tracing::info_span!(
@@ -113,14 +98,7 @@ async fn invoke_inner(
             content: output.content,
             is_error: false,
         },
-        Err(error) => fail_with(
-            config.diagnostics.as_deref(),
-            request,
-            context,
-            FailureKind::Invocation,
-            "execution_error",
-            error.to_string(),
-        ),
+        Err(error) => fail_with(runtime.observer(), request, context, error),
     }
 }
 
@@ -142,17 +120,28 @@ pub(crate) fn error_result(
     }
 }
 
-/// Records the failure to the diagnostics sink (if any) and returns the
+/// Records the failure to the observer (if any) and returns the
 /// corresponding error result.
 pub(crate) fn fail_with(
-    sink: Option<&dyn DiagnosticsSink>,
+    observer: Option<&dyn ExecutionObserver>,
     request: &ExecutionRequest,
     context: &ToolContext,
-    kind: FailureKind,
-    code: &str,
-    message: impl Into<String>,
+    error: ExecutionError,
 ) -> ExecutionResult {
-    let message = message.into();
-    record_failure(sink, context, request, kind, &message);
-    error_result(request, code, message)
+    notify(
+        observer,
+        ExecutionEvent::Failed {
+            execution_id: request.id.clone(),
+            tool: request.tool.clone(),
+            error: error.clone(),
+            argument_keys: request
+                .arguments
+                .as_object()
+                .map(|args| args.keys().cloned().collect())
+                .unwrap_or_default(),
+            cwd: context.cwd.clone(),
+            env_keys: context.env.keys().cloned().collect(),
+        },
+    );
+    error_result(request, error.code(), error.to_string())
 }

@@ -1,5 +1,7 @@
+use crate::ExecutionError;
 use serde_json::Value;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A best-effort execution lifecycle observation.
@@ -16,12 +18,16 @@ pub enum ExecutionEvent {
         message: String,
         data: Option<Value>,
     },
+    Failed {
+        execution_id: String,
+        tool: String,
+        error: ExecutionError,
+        argument_keys: Vec<String>,
+        cwd: PathBuf,
+        env_keys: Vec<String>,
+    },
 }
 
-/// Non-blocking observation hook.
-///
-/// Implementations should enqueue or record the event quickly. Slow work must
-/// be moved to infrastructure owned by the observer.
 pub trait ExecutionObserver: Send + Sync + 'static {
     fn on_event(&self, event: ExecutionEvent);
 }

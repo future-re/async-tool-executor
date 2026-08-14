@@ -31,7 +31,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             env: Arc::new(HashMap::new()),
             tool_timeout: None,
             concurrency_limit: 4,
-            diagnostics: None,
         },
     );
 

@@ -1,6 +1,6 @@
 use crate::support::tools::{PanickingTool, ProbeTool};
 use crate::support::{config, request};
-use executor_core::{ExecutionOptions, ToolExecutor, ToolRegistry};
+use executor_core::{SubmissionControls, ToolExecutor, ToolRegistry};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
@@ -17,12 +17,12 @@ async fn panic_is_isolated_for_single_and_batch_execution() {
     let executor = ToolExecutor::new(tools, config(2));
 
     let single = executor
-        .execute(request("single", "panic"), ExecutionOptions::new())
+        .execute(request("single", "panic"), SubmissionControls::new())
         .await;
     let batch = executor
         .execute_all(
             vec![request("p", "panic"), request("ok", "probe")],
-            ExecutionOptions::new(),
+            SubmissionControls::new(),
         )
         .await;
 

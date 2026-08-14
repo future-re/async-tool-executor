@@ -1,6 +1,6 @@
 use crate::support::tools::{CountingTool, HoldingTool, ProbeTool};
 use crate::support::{config, request};
-use executor_core::{ExecutionOptions, ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_core::{ExecutorConfig, SubmissionControls, ToolExecutor, ToolRegistry};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -25,7 +25,7 @@ async fn queued_requests_honor_cancellation_and_deadline() {
         let executor = executor.clone();
         async move {
             executor
-                .execute(request("holder", "hold"), ExecutionOptions::new())
+                .execute(request("holder", "hold"), SubmissionControls::new())
                 .await
         }
     });
@@ -39,12 +39,11 @@ async fn queued_requests_honor_cancellation_and_deadline() {
     };
     let cancelled = executor.execute(
         request("cancelled-in-queue", "count"),
-        ExecutionOptions::new().with_cancellation(cancellation),
+        SubmissionControls::new().with_cancellation(cancellation),
     );
     let timed_out = executor.execute(
         request("timed-out-in-queue", "count"),
-        ExecutionOptions::new()
-            .with_deadline(tokio::time::Instant::now() + Duration::from_millis(10)),
+        SubmissionControls::new().with_timeout(Duration::from_millis(10)),
     );
     let (cancelled, timed_out, ()) = tokio::join!(cancelled, timed_out, cancel);
 
@@ -72,8 +71,8 @@ async fn tool_timeout_starts_after_the_global_permit_is_acquired() {
     );
 
     let (first, second) = tokio::join!(
-        executor.execute(request("first", "probe"), ExecutionOptions::new()),
-        executor.execute(request("second", "probe"), ExecutionOptions::new()),
+        executor.execute(request("first", "probe"), SubmissionControls::new()),
+        executor.execute(request("second", "probe"), SubmissionControls::new()),
     );
 
     assert!(!first.is_error);
@@ -96,14 +95,14 @@ async fn timeout_and_cancellation_are_terminal_results() {
         },
     );
     let timeout = executor
-        .execute(request("timeout", "probe"), ExecutionOptions::new())
+        .execute(request("timeout", "probe"), SubmissionControls::new())
         .await;
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     let cancelled = executor
         .execute(
             request("cancelled", "probe"),
-            ExecutionOptions::new().with_cancellation(cancellation),
+            SubmissionControls::new().with_cancellation(cancellation),
         )
         .await;
 
