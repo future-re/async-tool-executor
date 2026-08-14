@@ -79,7 +79,7 @@ async fn unsafe_tool_is_exclusive_across_submissions() {
 
     let (parallel, exclusive) = tokio::join!(
         executor.execute(request("parallel", "probe"), SubmissionControls::new()),
-        executor.execute(request("exclusive", "exclusive"), SubmissionControls::new()),
+        executor.execute(request("exclusive", "exclusive"), SubmissionControls::new(),),
     );
 
     assert!(!parallel.is_error);

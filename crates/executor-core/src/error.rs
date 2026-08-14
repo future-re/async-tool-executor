@@ -16,6 +16,8 @@ pub enum ExecutionError {
     Cancelled { message: String },
     #[error("tool panicked: {0}")]
     Panicked(String),
+    #[error("executor is shut down")]
+    ExecutorClosed,
     #[error("{0}")]
     Other(String),
 }
@@ -32,6 +34,7 @@ impl ExecutionError {
             ExecutionError::TimedOut { .. } => "timed_out",
             ExecutionError::Cancelled { .. } => "cancelled",
             ExecutionError::Panicked(_) => "execution_panic",
+            ExecutionError::ExecutorClosed => "executor_closed",
             ExecutionError::Other(_) => "execution_error",
         }
     }

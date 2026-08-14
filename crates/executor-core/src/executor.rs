@@ -1,52 +1,18 @@
 use crate::observer::ExecutionObserver;
 use crate::scheduler::{self, ExecutionRuntime};
-use crate::{ExecutionRequest, ExecutionResult, ExecutorConfig, ToolRegistry};
+use crate::{ExecutionRequest, ExecutionResult, ExecutorConfig, SubmissionControls, ToolRegistry};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
-
-/// Per-submission controls. Requests passed to the executor are already authorized.
-#[derive(Clone)]
-pub struct SubmissionControls {
-    deadline: Option<Instant>,
-    cancellation: CancellationToken,
-}
-
-impl SubmissionControls {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.deadline = Some(Instant::now() + timeout);
-        self
-    }
-
-    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
-        self.cancellation = cancellation;
-        self
-    }
-
-    pub(crate) fn deadline(&self) -> Option<Instant> {
-        self.deadline
-    }
-
-    pub(crate) fn cancellation(&self) -> &CancellationToken {
-        &self.cancellation
-    }
-}
-
-impl Default for SubmissionControls {
-    fn default() -> Self {
-        Self {
-            deadline: None,
-            cancellation: CancellationToken::new(),
-        }
-    }
-}
 
 /// Clone-cheap async execution service.
+///
+/// This is the primary entry point for running tools. Build it with
+/// [`ToolExecutor::new`], attach an optional observer, then submit requests
+/// through [`execute`](ToolExecutor::execute) (single, in order) or
+/// [`execute_all`](ToolExecutor::execute_all) (batch, results kept in input
+/// order).
+///
+/// The executor is cheap to clone: all submissions share one runtime
+/// (tool registry, config, concurrency pool and observer).
 #[derive(Clone)]
 pub struct ToolExecutor {
     runtime: ExecutionRuntime,
@@ -64,19 +30,33 @@ impl ToolExecutor {
         self
     }
 
+    /// Runs a single request and returns its result.
+    ///
+    /// A single request has no peers, so this is trivially ordered: the
+    /// request executes and its one result is returned directly.
     pub async fn execute(
         &self,
         request: ExecutionRequest,
         options: SubmissionControls,
     ) -> ExecutionResult {
-        scheduler::execute_one(request, options, self.runtime.clone()).await
+        scheduler::execute(vec![request], options, self.runtime.clone())
+            .await
+            .into_iter()
+            .next()
+            .expect("one request yields one result")
     }
 
+    /// Runs a batch of requests, preserving input order in the results.
+    ///
+    /// The requests run concurrently, bounded by
+    /// `ExecutorConfig::concurrency_limit`; how many run in parallel is
+    /// decided by how many are submitted together. Results are returned in
+    /// the same order as the input.
     pub async fn execute_all(
         &self,
         requests: Vec<ExecutionRequest>,
         options: SubmissionControls,
     ) -> Vec<ExecutionResult> {
-        scheduler::execute_all(requests, options, self.runtime.clone()).await
+        scheduler::execute(requests, options, self.runtime.clone()).await
     }
 }

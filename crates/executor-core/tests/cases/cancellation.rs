@@ -71,8 +71,8 @@ async fn tool_timeout_starts_after_the_global_permit_is_acquired() {
     );
 
     let (first, second) = tokio::join!(
-        executor.execute(request("first", "probe"), SubmissionControls::new()),
-        executor.execute(request("second", "probe"), SubmissionControls::new()),
+        executor.execute(request("first", "probe"), SubmissionControls::new(),),
+        executor.execute(request("second", "probe"), SubmissionControls::new(),),
     );
 
     assert!(!first.is_error);

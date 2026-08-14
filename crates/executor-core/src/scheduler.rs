@@ -1,4 +1,4 @@
-use crate::invocation::{error_result, fail_with, invoke};
+use crate::invocation::{fail_with, invoke};
 use crate::observer::{ExecutionEvent, ExecutionObserver, ProgressReporter, notify};
 use crate::{
     ExecutionError, ExecutionRequest, ExecutionResult, ExecutorConfig, SubmissionControls,
@@ -10,16 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
-
-struct PreparedExecution {
-    index: usize,
-    request: ExecutionRequest,
-}
-
-struct IndexedResult {
-    index: usize,
-    result: ExecutionResult,
-}
+use tokio_util::sync::CancellationToken;
 
 /// Capacity pair for the concurrency semaphore. The semaphore does not expose
 /// its total capacity, so the count is kept alongside to guarantee that
@@ -76,23 +67,9 @@ impl ExecutionRuntime {
     }
 }
 
-pub(crate) async fn execute_one(
-    request: ExecutionRequest,
-    options: SubmissionControls,
-    runtime: ExecutionRuntime,
-) -> ExecutionResult {
-    let concurrent = is_concurrent(&request, &runtime.tools);
-    run_isolated(
-        PreparedExecution { index: 0, request },
-        runtime,
-        options,
-        !concurrent,
-    )
-    .await
-    .result
-}
-
-pub(crate) async fn execute_all(
+/// Runs a batch of requests concurrently, bounded by the runtime's concurrency
+/// limit. Results are returned in input order.
+pub(crate) async fn execute(
     requests: Vec<ExecutionRequest>,
     options: SubmissionControls,
     runtime: ExecutionRuntime,
@@ -100,85 +77,45 @@ pub(crate) async fn execute_all(
     let mut active = requests
         .into_iter()
         .enumerate()
-        .map(|(index, request)| {
-            let exclusive = !is_concurrent(&request, &runtime.tools);
-            run_isolated(
-                PreparedExecution { index, request },
-                runtime.clone(),
-                options.clone(),
-                exclusive,
-            )
-        })
+        .map(|(index, request)| run_one(request, index, &options, &runtime))
         .collect::<FuturesUnordered<_>>();
     let mut completed = Vec::with_capacity(active.len());
-    while let Some(result) = active.next().await {
-        completed.push(result);
+    while let Some((index, result)) = active.next().await {
+        completed.push((index, result));
     }
-    completed.sort_by_key(|item| item.index);
-    completed.into_iter().map(|item| item.result).collect()
+    completed.sort_by_key(|(index, _)| *index);
+    completed.into_iter().map(|(_, result)| result).collect()
 }
 
-fn is_concurrent(request: &ExecutionRequest, tools: &ToolRegistry) -> bool {
-    match tools.resolve(&request.tool) {
-        Ok(tool) => catch_unwind(AssertUnwindSafe(|| {
-            tool.implementation.is_concurrency_safe(&request.arguments)
-        }))
-        .unwrap_or(false),
-        Err(_) => true,
-    }
-}
+/// Runs one request through its full lifecycle: queue for a permit, execute
+/// with panic isolation, and return the result alongside its input index.
+async fn run_one(
+    request: ExecutionRequest,
+    index: usize,
+    options: &SubmissionControls,
+    runtime: &ExecutionRuntime,
+) -> (usize, ExecutionResult) {
+    let mut context = tool_context(&request, &runtime.config, options, runtime.observer.clone());
+    let exclusive = !is_concurrent(&request, &runtime.tools);
 
-async fn run_isolated(
-    prepared: PreparedExecution,
-    runtime: ExecutionRuntime,
-    options: SubmissionControls,
-    exclusive: bool,
-) -> IndexedResult {
-    let index = prepared.index;
-    let request = prepared.request;
-    let mut context = tool_context(
-        &request,
-        &runtime.config,
-        &options,
-        runtime.observer.clone(),
-    );
-    let permit = match acquire_permit(runtime.pool.clone(), exclusive, &context).await {
+    let permit = match acquire_permit(
+        runtime.pool.clone(),
+        exclusive,
+        options.deadline(),
+        &context.cancellation,
+    )
+    .await
+    {
         Ok(permit) => permit,
-        Err(QueueExit::TimedOut) => {
+        Err(error) => {
             context.cancellation.cancel();
-            return IndexedResult {
+            return (
                 index,
-                result: fail_with(
-                    runtime.observer(),
-                    &request,
-                    &context,
-                    ExecutionError::TimedOut {
-                        message: "execution deadline exceeded while queued".into(),
-                    },
-                ),
-            };
-        }
-        Err(QueueExit::Cancelled) => {
-            context.cancellation.cancel();
-            return IndexedResult {
-                index,
-                result: fail_with(
-                    runtime.observer(),
-                    &request,
-                    &context,
-                    ExecutionError::Cancelled {
-                        message: "execution cancelled while queued".into(),
-                    },
-                ),
-            };
-        }
-        Err(QueueExit::Closed) => {
-            return IndexedResult {
-                index,
-                result: error_result(&request, "executor_closed", "executor semaphore closed"),
-            };
+                fail_with(runtime.observer(), &request, &context, error),
+            );
         }
     };
+
     context.deadline = effective_deadline(options.deadline(), runtime.config.tool_timeout);
     let panic_request = request.clone();
     let panic_context = context.clone();
@@ -208,46 +145,45 @@ async fn run_isolated(
         }
     };
     drop(permit);
-    IndexedResult { index, result }
+    (index, result)
 }
 
-enum QueueExit {
-    TimedOut,
-    Cancelled,
-    Closed,
-}
-
+/// Waits for a permit, racing cancellation and the submission deadline.
 async fn acquire_permit(
     pool: PermitPool,
     exclusive: bool,
-    context: &ToolContext,
-) -> Result<OwnedSemaphorePermit, QueueExit> {
-    let acquisition = async move {
-        if exclusive {
-            pool.permits.acquire_many_owned(pool.count).await
-        } else {
-            pool.permits.acquire_owned().await
+    deadline: Option<Instant>,
+    cancellation: &CancellationToken,
+) -> Result<OwnedSemaphorePermit, ExecutionError> {
+    let wait = async {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(ExecutionError::Cancelled {
+                message: "execution cancelled while queued".into(),
+            }),
+            permit = async {
+                if exclusive {
+                    pool.permits.acquire_many_owned(pool.count).await
+                } else {
+                    pool.permits.acquire_owned().await
+                }
+            } => permit.map_err(|_| ExecutionError::ExecutorClosed),
         }
     };
-    tokio::pin!(acquisition);
 
-    let permit = if let Some(deadline) = context.deadline {
-        tokio::select! {
-            biased;
-            _ = context.cancellation.cancelled() => return Err(QueueExit::Cancelled),
-            _ = tokio::time::sleep_until(deadline) => return Err(QueueExit::TimedOut),
-            permit = &mut acquisition => permit,
+    match deadline {
+        Some(deadline) => {
+            tokio::time::timeout_at(deadline, wait)
+                .await
+                .map_err(|_| ExecutionError::TimedOut {
+                    message: "execution deadline exceeded while queued".into(),
+                })?
         }
-    } else {
-        tokio::select! {
-            biased;
-            _ = context.cancellation.cancelled() => return Err(QueueExit::Cancelled),
-            permit = &mut acquisition => permit,
-        }
-    };
-    permit.map_err(|_| QueueExit::Closed)
+        None => wait.await,
+    }
 }
 
+/// Resolves the tool and invokes it, reporting the lifecycle start event.
 async fn run_prepared(
     request: ExecutionRequest,
     context: ToolContext,
@@ -281,9 +217,19 @@ fn tool_context(
         execution_id: request.id.clone(),
         cwd: config.cwd.clone(),
         env: Arc::clone(&config.env),
-        deadline: options.deadline(),
+        deadline: None,
         cancellation: options.cancellation().child_token(),
         progress: ProgressReporter::new(observer, request.id.clone(), request.tool.clone()),
+    }
+}
+
+fn is_concurrent(request: &ExecutionRequest, tools: &ToolRegistry) -> bool {
+    match tools.resolve(&request.tool) {
+        Ok(tool) => catch_unwind(AssertUnwindSafe(|| {
+            tool.implementation.is_concurrency_safe(&request.arguments)
+        }))
+        .unwrap_or(false),
+        Err(_) => true,
     }
 }
 
