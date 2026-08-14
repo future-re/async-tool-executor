@@ -36,8 +36,8 @@ pub struct GuardedSink {
 }
 
 impl GuardedSink {
-    pub fn new(inner: Arc<dyn DiagnosticsSink>) -> Self {
-        Self { inner }
+    pub fn new(inner: Arc<dyn DiagnosticsSink>) -> Arc<Self> {
+        Arc::new(Self { inner })
     }
 }
 

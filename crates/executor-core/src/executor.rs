@@ -48,7 +48,7 @@ impl ToolExecutor {
     pub fn new(tools: ToolRegistry, mut config: ExecutorConfig) -> Self {
         config.diagnostics = config
             .diagnostics
-            .map(|sink| Arc::new(GuardedSink::new(sink)) as Arc<dyn crate::DiagnosticsSink>);
+            .map(|sink| GuardedSink::new(sink) as Arc<dyn crate::DiagnosticsSink>);
         Self {
             runtime: ExecutionRuntime::new(Arc::new(tools), Arc::new(config), None),
         }
