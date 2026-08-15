@@ -357,9 +357,13 @@ else {
 }
 
 Write-Host "Installing guest daemon to $GuestProgram ..."
-$guestDir = Split-Path -Parent $GuestProgram
+# Resolve the install directory inside WSL. `Split-Path` on Windows converts
+# a Linux path like /home/<user>/.local/bin/ate-daemon into backslash form
+# (e.g. \home\<user>\.local\bin), and those backslashes are then mangled by
+# the bash -lc bootstrap, creating a garbage directory in the WSL cwd.
+# Compute the directory with bash instead so forward slashes survive.
 Invoke-Wsl "[ ! -x '$GuestProgram' ] || '$GuestProgram' stop >/dev/null 2>&1 || true"
-Invoke-Wsl "mkdir -p '$guestDir' && install -m 755 '$installSource' '$GuestProgram'"
+Invoke-Wsl "mkdir -p '`$(dirname '$GuestProgram')' && install -m 755 '$installSource' '$GuestProgram'"
 
 if ($InstallConfig) {
     $configDest = "$wslHome/.config/ate/config.json"
