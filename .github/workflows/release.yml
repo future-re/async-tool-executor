@@ -1,0 +1,111 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cross-build:
+    name: Cross-compile WSL daemon
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Cross-compile ${{ matrix.target }}
+        run: |
+          cargo zigbuild --release \
+            -p wsl-executor-daemon \
+            --target ${{ matrix.target }}
+
+      - name: Package daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          asset_base="ate-daemon-${tag}-${{ matrix.target }}"
+          stage="$(mktemp -d)"
+          cp "target/${{ matrix.target }}/release/wsl-executor-daemon" "$stage/ate-daemon"
+          cp "crates/wsl-executor-daemon/config.example.json" "$stage/config.example.json"
+          tar -czf "$asset_base.tar.gz" -C "$stage" ate-daemon config.example.json
+          rm -rf "$stage"
+          echo "asset=${asset_base}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Verify ELF binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          file "target/${{ matrix.target }}/release/wsl-executor-daemon" | grep -E "ELF"
+          tar -xOf "${{ env.asset }}" ate-daemon > /tmp/ate-daemon-check
+          head -c 4 /tmp/ate-daemon-check | od -An -tx1 | grep -q "7f 45 4c 46"
+
+      - name: Upload asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.target }}
+          path: ${{ env.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all assets
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+
+      - name: Assemble asset list
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find assets -name "*.tar.gz" -type f)
+          echo "files=${#files[@]}"
+          printf '%s\n' "${files[@]}"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find assets -name "*.tar.gz" -type f)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; uploading assets"
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            echo "Creating release $TAG"
+            gh release create "$TAG" "${files[@]}" --title "$TAG"
+          fi
+
+  tests:
+    name: Workspace tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --workspace

@@ -28,6 +28,7 @@ Windows Agent
 | `wsl-runtime` | Linux process execution, resource limits and process-group cleanup |
 | `wsl-executor-daemon` | Persistent WSL loopback service, authentication and per-workspace sessions |
 | `windows-agent-client` | Windows API, WSL service discovery and TCP transport |
+| `ate-mcp` | MCP stdio server exposing daemon tools to MCP agents (e.g. opencode) |
 
 The Windows side submits tool requests. Tool resolution, scheduling and process
 execution remain on the WSL side, so the Windows client does not act as a remote
@@ -182,3 +183,25 @@ the configured global concurrency limit is shared across all sessions. Shell
 working directories are independently canonicalized before process spawn and
 cannot escape the session workspace. Projects, Git data, dependencies and build
 outputs remain on WSL ext4; no file synchronization protocol is involved.
+
+## Exposing tools to an MCP agent
+
+The `ate-mcp` crate bridges the daemon's tools to any MCP client (for example
+opencode) over standard stdio JSON-RPC. See
+[`docs/ate-mcp.md`](docs/ate-mcp.md) for build, configuration and opencode
+integration instructions.
+
+## Prebuilt releases
+
+The daemon is distributed as a static Linux binary through GitHub Releases.
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which
+cross-compiles `x86_64` and `aarch64` musl builds and uploads them. The
+install script detects the WSL architecture and fetches the matching asset:
+
+```powershell
+.\install-wsl-executor.ps1 -Repo <owner>/<repo> -ReleaseTag v0.1.0
+.\install-wsl-executor.ps1 -ReleaseUrl "https://github.com/<owner>/<repo>/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz"
+```
+
+`publish-release.ps1` publishes from a local Windows machine instead of CI.
+See [`docs/ate-mcp.md`](docs/ate-mcp.md) for the full workflow.

@@ -57,16 +57,41 @@ Override the build directory. For native builds this is a Linux path inside
 WSL (default: ~/.cache/ate/target). For cross builds it is a Windows path
 (default: %LOCALAPPDATA%\ate-cross-target).
 
+.PARAMETER ReleaseUrl
+Download URL of a prebuilt daemon tar.gz from a GitHub Release (see
+publish-release.ps1 and .github/workflows/release.yml). When set, the daemon
+is fetched instead of compiled; BuildMode, CrossTarget, InstallTools and
+BuildDir are ignored. The archive must contain an executable named
+`ate-daemon`.
+
+The placeholder `{arch}` is replaced with the WSL architecture's Rust target
+(e.g. `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`), so one
+template serves every platform:
+
+  -ReleaseUrl "https://github.com/<owner>/<repo>/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz"
+
+.PARAMETER Repo
+GitHub repository (`owner/repo`) for the prebuilt daemon. When set together
+with -ReleaseTag, the download URL is built automatically from the CI asset
+naming scheme; -ReleaseUrl overrides this.
+
+.PARAMETER ReleaseTag
+Release tag to fetch when -Repo is set, e.g. "v0.1.0".
+
 .PARAMETER SkipClient
-Skip building and installing the Windows ate.exe tool-management CLI.
+Skip building and installing the Windows ate.exe tool-management CLI and the
+ate-mcp.exe MCP server.
 
 .PARAMETER ClientInstallDir
-Windows destination for ate.exe. Defaults to %LOCALAPPDATA%\ate\bin.
+Windows destination for ate.exe and ate-mcp.exe. Defaults to
+%LOCALAPPDATA%\ate\bin.
 
 .EXAMPLE
 .\install-wsl-executor.ps1
 .\install-wsl-executor.ps1 -Distribution Ubuntu -InstallConfig
 .\install-wsl-executor.ps1 -BuildMode cross -InstallTools
+.\install-wsl-executor.ps1 -ReleaseUrl "https://github.com/owner/repo/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz"
+.\install-wsl-executor.ps1 -Repo owner/repo -ReleaseTag v0.1.0
 #>
 [CmdletBinding()]
 param(
@@ -80,6 +105,9 @@ param(
     [string]$WorkspaceRoot = "~/code",
     [switch]$InstallTools,
     [string]$BuildDir,
+    [string]$ReleaseUrl,
+    [string]$Repo,
+    [string]$ReleaseTag,
     [switch]$SkipClient,
     [string]$ClientInstallDir = "$env:LOCALAPPDATA\ate\bin"
 )
@@ -198,89 +226,133 @@ if (-not $WorkspaceRoot.StartsWith("/") -or $WorkspaceRoot.StartsWith("/mnt/")) 
     throw "WorkspaceRoot must be an absolute WSL ext4 path outside /mnt, got: $WorkspaceRoot"
 }
 
-$wslCargo = $true
-try {
-    Invoke-Wsl "command -v cargo >/dev/null 2>&1 || exit 1"
-}
-catch {
-    $wslCargo = $false
-}
-
-$mode = $BuildMode
-if ($mode -eq "auto") {
-    if ($wslCargo) { $mode = "native" } else { $mode = "cross" }
-}
-Write-Host "Build mode: $mode (WSL cargo present: $wslCargo)"
-
-switch ($mode) {
-    "native" {
-        if (-not $wslCargo) {
-            throw "native build requested but cargo is not installed in WSL '$Distribution'. Install Rust with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  (or use -BuildMode cross to build from Windows)"
-        }
-        if (-not $BuildDir) { $BuildDir = "$wslHome/.cache/ate/target" }
-        if (-not $BuildDir.StartsWith("/")) { throw "BuildDir must be an absolute Linux path inside WSL, got: $BuildDir" }
-
-        Write-Host "Building wsl-executor-daemon inside WSL ($Distribution) ..."
-        Invoke-Wsl "cd '$wslRoot' && CARGO_TARGET_DIR='$BuildDir' RUSTUP_TOOLCHAIN=stable cargo build --release -p wsl-executor-daemon"
-        $binary = "$BuildDir/release/wsl-executor-daemon"
-        Invoke-Wsl "od -An -tx1 -N4 '$binary' 2>/dev/null | grep -q '7f 45 4c 46' || { echo 'built binary is not an ELF executable: $binary' >&2; exit 1; }"
-        $installSource = $binary
+if (-not $ReleaseUrl) {
+    if ($Repo -and $ReleaseTag) {
+        $ReleaseUrl = "https://github.com/$Repo/releases/download/$ReleaseTag/ate-daemon-$ReleaseTag-{arch}.tar.gz"
     }
-    "cross" {
-        Write-Host "Checking Windows-side Rust toolchain ..."
-        if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-            throw "cargo not found on Windows. Install Rust with: https://rustup.rs"
+}
+
+if ($ReleaseUrl) {
+    $arch = (Invoke-Wsl "uname -m").Trim()
+    switch -Regex ($arch) {
+        "^(aarch64|arm64)$" { $rustTarget = "aarch64-unknown-linux-musl" }
+        default             { $rustTarget = "x86_64-unknown-linux-musl" }
+    }
+    if ($ReleaseUrl.Contains("{arch}")) {
+        $ReleaseUrl = $ReleaseUrl.Replace("{arch}", $rustTarget)
+    }
+    Write-Host "WSL architecture: $arch (target: $rustTarget)"
+    Write-Host "Downloading prebuilt daemon from $ReleaseUrl ..."
+    $archive = Join-Path $env:TEMP "ate-daemon-release-$PID.tar.gz"
+    $extract = Join-Path $env:TEMP "ate-daemon-release-$PID"
+    try {
+        Invoke-WebRequest -Uri $ReleaseUrl -OutFile $archive -TimeoutSec 300
+        New-Item -ItemType Directory -Path $extract -Force | Out-Null
+        tar -xzf $archive -C $extract
+        $guestSource = Join-Path $extract "ate-daemon"
+        if (-not (Test-Path -LiteralPath $guestSource)) {
+            throw "release archive does not contain an 'ate-daemon' executable"
         }
-        if (-not (Get-Command cargo-zigbuild -ErrorAction SilentlyContinue)) {
-            if ($InstallTools) {
-                Write-Host "Installing cargo-zigbuild ..."
-                cargo install cargo-zigbuild --locked
-                if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-zigbuild failed" }
-            }
-            else {
-                throw "cargo-zigbuild is required for cross builds. Run 'cargo install cargo-zigbuild --locked' or re-run with -InstallTools."
-            }
+        $fs = [System.IO.File]::OpenRead($guestSource)
+        try {
+            $magic = New-Object byte[] 4
+            $read = $fs.Read($magic, 0, 4)
+            $isElf = ($read -eq 4 -and $magic[0] -eq 0x7f -and $magic[1] -eq 0x45 -and $magic[2] -eq 0x4c -and $magic[3] -eq 0x46)
         }
+        finally { $fs.Dispose() }
+        if (-not $isElf) { throw "downloaded daemon is not an ELF executable: $guestSource" }
+        $installSource = ConvertTo-WslPath $guestSource
+        Write-Host "Downloaded and verified ELF daemon: $guestSource"
+    }
+    catch {
+        throw "failed to fetch daemon release: $_"
+    }
+}
+else {
+    $wslCargo = $true
+    try {
+        Invoke-Wsl "command -v cargo >/dev/null 2>&1 || exit 1"
+    }
+    catch {
+        $wslCargo = $false
+    }
 
-        if (-not (Get-Command zig -ErrorAction SilentlyContinue)) {
-            $existing = Find-ZigRoot
-            if ($existing) {
-                Write-Host "Using Zig from $($existing.FullName)"
-                $env:PATH = "$($existing.FullName);$env:PATH"
+    $mode = $BuildMode
+    if ($mode -eq "auto") {
+        if ($wslCargo) { $mode = "native" } else { $mode = "cross" }
+    }
+    Write-Host "Build mode: $mode (WSL cargo present: $wslCargo)"
+
+    switch ($mode) {
+        "native" {
+            if (-not $wslCargo) {
+                throw "native build requested but cargo is not installed in WSL '$Distribution'. Install Rust with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  (or use -BuildMode cross to build from Windows)"
             }
-            elseif ($InstallTools) {
-                Install-Zig
+            if (-not $BuildDir) { $BuildDir = "$wslHome/.cache/ate/target" }
+            if (-not $BuildDir.StartsWith("/")) { throw "BuildDir must be an absolute Linux path inside WSL, got: $BuildDir" }
+
+            Write-Host "Building wsl-executor-daemon inside WSL ($Distribution) ..."
+            Invoke-Wsl "cd '$wslRoot' && CARGO_TARGET_DIR='$BuildDir' RUSTUP_TOOLCHAIN=stable cargo build --release -p wsl-executor-daemon"
+            $binary = "$BuildDir/release/wsl-executor-daemon"
+            Invoke-Wsl "od -An -tx1 -N4 '$binary' 2>/dev/null | grep -q '7f 45 4c 46' || { echo 'built binary is not an ELF executable: $binary' >&2; exit 1; }"
+            $installSource = $binary
+        }
+        "cross" {
+            Write-Host "Checking Windows-side Rust toolchain ..."
+            if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+                throw "cargo not found on Windows. Install Rust with: https://rustup.rs"
             }
-            else {
-                throw "zig is required for cross builds (cargo-zigbuild uses it as the cross linker). Re-run with -InstallTools to install it automatically, or install Zig from https://ziglang.org/download"
+            if (-not (Get-Command cargo-zigbuild -ErrorAction SilentlyContinue)) {
+                if ($InstallTools) {
+                    Write-Host "Installing cargo-zigbuild ..."
+                    cargo install cargo-zigbuild --locked
+                    if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-zigbuild failed" }
+                }
+                else {
+                    throw "cargo-zigbuild is required for cross builds. Run 'cargo install cargo-zigbuild --locked' or re-run with -InstallTools."
+                }
             }
+
+            if (-not (Get-Command zig -ErrorAction SilentlyContinue)) {
+                $existing = Find-ZigRoot
+                if ($existing) {
+                    Write-Host "Using Zig from $($existing.FullName)"
+                    $env:PATH = "$($existing.FullName);$env:PATH"
+                }
+                elseif ($InstallTools) {
+                    Install-Zig
+                }
+                else {
+                    throw "zig is required for cross builds (cargo-zigbuild uses it as the cross linker). Re-run with -InstallTools to install it automatically, or install Zig from https://ziglang.org/download"
+                }
+            }
+
+            $target = if ($CrossTarget -eq "musl") { "x86_64-unknown-linux-musl" } else { "x86_64-unknown-linux-gnu" }
+            if (-not $BuildDir) {
+                $BuildDir = Join-Path $env:LOCALAPPDATA "ate-cross-target"
+            }
+            elseif (-not [System.IO.Path]::IsPathRooted($BuildDir)) {
+                $BuildDir = Join-Path $root $BuildDir
+            }
+            $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
+            New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
+
+            Write-Host "Cross-compiling wsl-executor-daemon for $target (no Rust needed in WSL) ..."
+            Write-Host "Ensuring Rust target '$target' is installed ..."
+            rustup target add $target
+            if ($LASTEXITCODE -ne 0) { throw "rustup target add $target failed" }
+
+            $env:CARGO_TARGET_DIR = $BuildDir
+            cargo zigbuild --release -p wsl-executor-daemon --target $target
+            if ($LASTEXITCODE -ne 0) { throw "cargo zigbuild failed with exit code $LASTEXITCODE" }
+
+            $binary = Join-Path $BuildDir "$target\release\wsl-executor-daemon"
+            if (-not (Test-Path -LiteralPath $binary)) { throw "expected binary not found: $binary" }
+            if (-not (Test-ElfBinary $binary)) { throw "built binary is not an ELF executable: $binary" }
+            Write-Host "Built Linux ELF binary: $binary"
+
+            $installSource = ConvertTo-WslPath $binary
         }
-
-        $target = if ($CrossTarget -eq "musl") { "x86_64-unknown-linux-musl" } else { "x86_64-unknown-linux-gnu" }
-        if (-not $BuildDir) {
-            $BuildDir = Join-Path $env:LOCALAPPDATA "ate-cross-target"
-        }
-        elseif (-not [System.IO.Path]::IsPathRooted($BuildDir)) {
-            $BuildDir = Join-Path $root $BuildDir
-        }
-        $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
-        New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
-
-        Write-Host "Cross-compiling wsl-executor-daemon for $target (no Rust needed in WSL) ..."
-        Write-Host "Ensuring Rust target '$target' is installed ..."
-        rustup target add $target
-        if ($LASTEXITCODE -ne 0) { throw "rustup target add $target failed" }
-
-        $env:CARGO_TARGET_DIR = $BuildDir
-        cargo zigbuild --release -p wsl-executor-daemon --target $target
-        if ($LASTEXITCODE -ne 0) { throw "cargo zigbuild failed with exit code $LASTEXITCODE" }
-
-        $binary = Join-Path $BuildDir "$target\release\wsl-executor-daemon"
-        if (-not (Test-Path -LiteralPath $binary)) { throw "expected binary not found: $binary" }
-        if (-not (Test-ElfBinary $binary)) { throw "built binary is not an ELF executable: $binary" }
-        Write-Host "Built Linux ELF binary: $binary"
-
-        $installSource = ConvertTo-WslPath $binary
     }
 }
 
@@ -305,18 +377,46 @@ if (-not $SkipClient) {
         throw "cargo was not found on Windows; install Rust or rerun with -SkipClient"
     }
     $clientBuildDir = Join-Path $env:LOCALAPPDATA "ate\build"
-    Write-Host "Building Windows tool-management CLI ..."
+    New-Item -ItemType Directory -Force -Path $ClientInstallDir | Out-Null
+
+    Write-Host "Building Windows tool-management CLI (ate.exe) ..."
     & cargo build --manifest-path (Join-Path $root "Cargo.toml") --release -p ate-cli --target-dir $clientBuildDir
     if ($LASTEXITCODE -ne 0) {
         throw "building ate-cli on Windows failed with code $LASTEXITCODE"
     }
-    New-Item -ItemType Directory -Force -Path $ClientInstallDir | Out-Null
     Copy-Item -Force (Join-Path $clientBuildDir "release\ate.exe") (Join-Path $ClientInstallDir "ate.exe")
     Write-Host "Installed Windows CLI to $(Join-Path $ClientInstallDir 'ate.exe')"
+
+    Write-Host "Building Windows MCP server (ate-mcp.exe) ..."
+    & cargo build --manifest-path (Join-Path $root "Cargo.toml") --release -p ate-mcp --target-dir $clientBuildDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "building ate-mcp on Windows failed with code $LASTEXITCODE"
+    }
+    Copy-Item -Force (Join-Path $clientBuildDir "release\ate-mcp.exe") (Join-Path $ClientInstallDir "ate-mcp.exe")
+    Write-Host "Installed Windows MCP server to $(Join-Path $ClientInstallDir 'ate-mcp.exe')"
+
+    Write-Host ""
+    Write-Host "opencode.json MCP entry (substitute your WSL workspace):"
+    Write-Host @"
+{
+  "mcp": {
+    "ate-wsl": {
+      "type": "local",
+      "command": ["$(Join-Path $ClientInstallDir 'ate-mcp.exe')"],
+      "environment": {
+        "ATE_MCP_DISTRIBUTION": "$Distribution",
+        "ATE_MCP_GUEST_PROGRAM": "$GuestProgram",
+        "ATE_MCP_WORKSPACE": "$WorkspaceRoot/my-project"
+      }
+    }
+  }
+}
+"@
 }
 
 Write-Host "Done. The Windows client connects with:"
 Write-Host "  WslClientConfig { distribution: `"$Distribution`", guest_program: `"$GuestProgram`", workspace: `"$WorkspaceRoot/my-project`" }"
 if (-not $SkipClient) {
     Write-Host "Add '$ClientInstallDir' to PATH to run: ate tool list --distribution $Distribution"
+    Write-Host "The MCP server registers as 'ate-wsl' after you restart opencode."
 }
