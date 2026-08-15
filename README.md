@@ -21,6 +21,7 @@ Windows Agent
 | --- | --- |
 | `executor-protocol` | Versioned, platform-neutral host/guest messages and framing |
 | `executor-core` | Tool registry, scheduling, concurrency, timeout, cancellation and observation |
+| `executor-tools` | Platform-neutral base tools: `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch` |
 | `wsl-runtime` | Linux process execution, resource limits and process-group cleanup |
 | `wsl-executor-daemon` | WSL stdio server, handshake and active-task lifecycle |
 | `windows-agent-client` | Windows API and `wsl.exe` process transport |
@@ -28,6 +29,35 @@ Windows Agent
 The Windows side submits tool requests. Tool resolution, scheduling and process
 execution remain on the WSL side, so the Windows client does not act as a remote
 `Shell` implementation.
+
+## Registering tools
+
+Any crate in the workspace can add a tool to the daemon:
+
+1. Implement [`executor_core::Tool`](crates/executor-core/src/tool.rs) — provide
+   `definition()` (name, description, JSON input schema) and `invoke()`.
+   `validate()`, `is_concurrency_safe()` and `invocation_detail()` have sensible
+   defaults.
+2. Call `ToolRegistry::register(...)` before building the `ToolExecutor`.
+
+The built-in set lives in [`executor-tools`](crates/executor-tools), which also
+exposes `register_core_tools(&mut registry)` to register all six base tools
+(`Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`) at once. The daemon wires
+them together with the Linux `shell` tool:
+
+```rust
+use executor_core::{ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_tools::register_core_tools;
+
+let mut registry = ToolRegistry::new();
+register_core_tools(&mut registry);
+registry.register(ShellTool::new(shell));
+
+let executor = ToolExecutor::new(registry, ExecutorConfig::default());
+```
+
+Registered tools appear in `ToolRegistry::list()`, which the daemon serves over
+`ListTools` capability discovery.
 
 ## Development
 
