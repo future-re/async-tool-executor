@@ -86,13 +86,23 @@ impl Session {
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": serde_json::to_string(&result.content).unwrap_or_else(|_| {
-                    "failed to serialize tool output".to_string()
-                }),
+                "text": to_text(&result.content),
             }],
             "isError": result.is_error,
         }))
     }
+}
+
+/// Formats a tool result for the model. Tools like `Read` wrap their output
+/// in an object with a `content` field; surface that text directly so the
+/// model sees the file body rather than a nested JSON envelope.
+fn to_text(content: &Value) -> String {
+    if let Some(text) = content.get("content").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    serde_json::to_string_pretty(content).unwrap_or_else(|_| {
+        "failed to serialize tool output".to_string()
+    })
 }
 
 fn to_mcp_tool(tool: &ToolDescriptor) -> Value {
