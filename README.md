@@ -205,3 +205,24 @@ install script detects the WSL architecture and fetches the matching asset:
 
 `publish-release.ps1` publishes from a local Windows machine instead of CI.
 See [`docs/ate-mcp.md`](docs/ate-mcp.md) for the full workflow.
+
+## Performance
+
+Key numbers measured on Windows 11 + WSL2 (Ubuntu, x86_64). Full details in
+[`docs/agent-test-report.md`](docs/agent-test-report.md).
+
+| Metric | Value |
+| --- | --- |
+| Read a WSL file (~10.7 KB) | **~46 ms** round-trip |
+| MCP bridge overhead (vs direct TCP) | **~2 ms** (~4%) |
+| Connection reuse (cached daemon) | **~2 ms** vs 223 ms cold |
+| Connect speedup | **~100x** |
+| Session concurrency limit | 4 (default) |
+| Global concurrency limit | 8 (default) |
+| Output cap (`max_stdout` / `max_stderr`) | 1 MiB each (`truncated` flag on overflow) |
+
+![Performance benchmark](docs/agent-test-report.png)
+
+Concurrent executions queue under the per-session limit (10 tasks -> 3 waves
+with 4 parallel), and in-flight tasks can be cancelled. Filesystem tools
+enforce read-before-mutate: writing without a prior `Read` is rejected.
