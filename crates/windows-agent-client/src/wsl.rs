@@ -5,8 +5,9 @@ use executor_protocol::{
     ServerMessage, ToolDescriptor, read_frame, write_frame,
 };
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::process::Command;
@@ -16,6 +17,31 @@ use tokio::task::JoinHandle;
 type PendingResult = oneshot::Sender<Result<ExecutionResult, ClientError>>;
 type CancelAck = oneshot::Sender<bool>;
 type ToolsAck = oneshot::Sender<Result<Vec<ToolDescriptor>, ClientError>>;
+
+/// Connection parameters for a resident daemon, enough to dial it over TCP.
+#[derive(Clone)]
+struct DaemonState {
+    port: u16,
+    token: String,
+}
+
+/// Cache key identifying one guest daemon by distribution and install path.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct DaemonKey {
+    distribution: String,
+    guest_program: PathBuf,
+}
+
+type DaemonCache = Mutex<HashMap<DaemonKey, DaemonState>>;
+
+/// Process-wide cache of known-good daemon endpoints. A cached entry is only
+/// trusted for one dial attempt; if the handshake fails the entry is dropped
+/// and `ensure-running` is invoked to rediscover the current daemon. This keeps
+/// the slow `wsl.exe` spawn out of the common reconnect path.
+fn daemon_cache() -> &'static DaemonCache {
+    static CACHE: OnceLock<DaemonCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 pub struct WslClient {
     requests: mpsc::UnboundedSender<ClientMessage>,
@@ -34,30 +60,40 @@ impl WslClient {
                 "expected an absolute Linux path".into(),
             ));
         }
-        let output = Command::new("wsl.exe")
-            .arg("--distribution")
-            .arg(&config.distribution)
-            .arg("--exec")
-            .arg(&config.guest_program)
-            .arg("ensure-running")
-            .output()
-            .await
-            .map_err(|error| ClientError::Spawn(error.to_string()))?;
-        if !output.status.success() {
-            return Err(ClientError::Spawn(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
+        let key = DaemonKey {
+            distribution: config.distribution.clone(),
+            guest_program: config.guest_program.clone(),
+        };
+
+        let cached = daemon_cache()
+            .lock()
+            .expect("daemon state cache poisoned")
+            .get(&key)
+            .cloned();
+        if let Some(state) = cached {
+            match Self::dial(config.clone(), &state).await {
+                Ok(client) => return Ok(client),
+                Err(error) => {
+                    tracing::debug!("cached daemon unreachable, rediscovering: {error}");
+                    daemon_cache()
+                        .lock()
+                        .expect("daemon state cache poisoned")
+                        .remove(&key);
+                }
+            }
         }
-        let state: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .map_err(|error| ClientError::Spawn(format!("invalid daemon state: {error}")))?;
-        let port = state["port"]
-            .as_u64()
-            .and_then(|value| u16::try_from(value).ok())
-            .ok_or_else(|| ClientError::Spawn("daemon state has no valid port".into()))?;
-        let token = state["token"]
-            .as_str()
-            .ok_or_else(|| ClientError::Spawn("daemon state has no token".into()))?;
-        let stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+
+        let state = ensure_running(&config).await?;
+        let client = Self::dial(config.clone(), &state).await?;
+        daemon_cache()
+            .lock()
+            .expect("daemon state cache poisoned")
+            .insert(key, state);
+        Ok(client)
+    }
+
+    async fn dial(config: WslClientConfig, state: &DaemonState) -> Result<Self, ClientError> {
+        let stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, state.port))
             .await
             .map_err(|error| {
                 ClientError::Spawn(format!("cannot connect to WSL daemon: {error}"))
@@ -68,8 +104,8 @@ impl WslClient {
             &mut stdin,
             &ClientMessage::Hello {
                 protocol_version: PROTOCOL_VERSION,
-                token: token.to_string(),
-                workspace: config.workspace.clone(),
+                token: state.token.clone(),
+                workspace: config.workspace,
             },
         )
         .await
@@ -194,6 +230,38 @@ impl WslClient {
             reader_task,
         })
     }
+}
+
+/// Asks the guest to report a running daemon's endpoint, starting one if
+/// needed. This is the only operation that spawns `wsl.exe`.
+async fn ensure_running(config: &WslClientConfig) -> Result<DaemonState, ClientError> {
+    let output = Command::new("wsl.exe")
+        .arg("--distribution")
+        .arg(&config.distribution)
+        .arg("--exec")
+        .arg(&config.guest_program)
+        .arg("ensure-running")
+        .output()
+        .await
+        .map_err(|error| ClientError::Spawn(error.to_string()))?;
+    if !output.status.success() {
+        return Err(ClientError::Spawn(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    let state: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| ClientError::Spawn(format!("invalid daemon state: {error}")))?;
+    let port = state["port"]
+        .as_u64()
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or_else(|| ClientError::Spawn("daemon state has no valid port".into()))?;
+    let token = state["token"]
+        .as_str()
+        .ok_or_else(|| ClientError::Spawn("daemon state has no token".into()))?;
+    Ok(DaemonState {
+        port,
+        token: token.to_string(),
+    })
 }
 
 #[async_trait]
