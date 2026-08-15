@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use executor_core::{ExecutorConfig, SubmissionControls, ToolExecutor, ToolRegistry};
 use executor_protocol::ExecutionRequest;
 use serde_json::json;

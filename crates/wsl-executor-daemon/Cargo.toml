@@ -8,6 +8,7 @@ license.workspace = true
 executor-core = { path = "../executor-core" }
 executor-protocol = { path = "../executor-protocol" }
 executor-tools = { path = "../executor-tools" }
+libc.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

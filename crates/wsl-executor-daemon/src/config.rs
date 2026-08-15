@@ -63,14 +63,53 @@ fn find_path() -> Result<Option<PathBuf>, ConfigError> {
     if let Some(value) = std::env::var_os("ATE_CONFIG") {
         return Ok(Some(PathBuf::from(value)));
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    if let Some(home) = home {
+    if let Some(home) = home_dir() {
         let default_path = home.join(".config/ate/config.json");
         if default_path.exists() {
             return Ok(Some(default_path));
         }
     }
     Ok(None)
+}
+
+/// Resolves the user's home directory. `HOME` is preferred when it is an
+/// absolute path. `wsl.exe --exec` inherits a mangled Windows profile value
+/// (e.g. `C:Usersfutur`) for `HOME`, so a non-absolute `HOME` is ignored in
+/// favour of the passwd entry, which always yields a real Linux home.
+fn home_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home {
+        Some(path) if path.is_absolute() => Some(path),
+        _ => unix_passwd_home().or(home),
+    }
+}
+
+/// Queries the passwd database for the current user's home directory via
+/// libc `getpwuid_r(3)`.
+#[cfg(unix)]
+fn unix_passwd_home() -> Option<PathBuf> {
+    unsafe {
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut buf = vec![0u8; 4096];
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let rc = libc::getpwuid_r(
+            libc::geteuid(),
+            &mut pwd,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            &mut result,
+        );
+        if rc != 0 || result.is_null() {
+            return None;
+        }
+        let dir = std::ffi::CStr::from_ptr(pwd.pw_dir);
+        Some(PathBuf::from(dir.to_string_lossy().into_owned()))
+    }
+}
+
+#[cfg(not(unix))]
+fn unix_passwd_home() -> Option<PathBuf> {
+    None
 }
 
 #[derive(Debug, thiserror::Error)]

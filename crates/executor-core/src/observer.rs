@@ -67,9 +67,9 @@ impl ProgressReporter {
 }
 
 pub(crate) fn notify(observer: Option<&dyn ExecutionObserver>, event: ExecutionEvent) {
-    if let Some(observer) = observer
-        && catch_unwind(AssertUnwindSafe(|| observer.on_event(event))).is_err()
-    {
-        tracing::warn!("execution observer panicked");
+    if let Some(observer) = observer {
+        if catch_unwind(AssertUnwindSafe(|| observer.on_event(event))).is_err() {
+            tracing::warn!("execution observer panicked");
+        }
     }
 }
