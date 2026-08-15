@@ -194,18 +194,20 @@ impl ExecutionClient for WslClient {
 
     async fn cancel(&self, execution_id: &str) -> Result<bool, ClientError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        let mut acks = self.cancel_acks.lock().expect("cancel ack map poisoned");
-        acks.insert(execution_id.to_string(), ack_tx);
-
-        if self
-            .requests
-            .send(ClientMessage::Cancel {
-                execution_id: execution_id.to_string(),
-            })
-            .is_err()
         {
-            acks.remove(execution_id);
-            return Err(ClientError::Disconnected);
+            let mut acks = self.cancel_acks.lock().expect("cancel ack map poisoned");
+            acks.insert(execution_id.to_string(), ack_tx);
+
+            if self
+                .requests
+                .send(ClientMessage::Cancel {
+                    execution_id: execution_id.to_string(),
+                })
+                .is_err()
+            {
+                acks.remove(execution_id);
+                return Err(ClientError::Disconnected);
+            }
         }
 
         ack_rx.await.map_err(|_| ClientError::Disconnected)

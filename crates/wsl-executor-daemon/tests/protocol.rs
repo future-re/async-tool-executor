@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use executor_core::{ExecutorConfig, ToolExecutor, ToolRegistry};
 use executor_protocol::{
     ClientMessage, DEFAULT_MAX_FRAME_SIZE, ExecutionRequest, PROTOCOL_VERSION, ServerMessage,
