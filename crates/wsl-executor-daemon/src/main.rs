@@ -1,9 +1,11 @@
 #[cfg(unix)]
+use executor_plugin::PluginStore;
+#[cfg(unix)]
 use std::sync::Arc;
 #[cfg(unix)]
 use tokio::sync::Semaphore;
 #[cfg(unix)]
-use wsl_executor_daemon::config::load;
+use wsl_executor_daemon::config::{default_plugin_dir, load};
 #[cfg(unix)]
 use wsl_executor_daemon::daemon::{DaemonRuntime, ensure_running, run_tcp, status, stop};
 #[cfg(unix)]
@@ -21,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or("stdio");
         let config_args = config_args(&args);
         match command {
+            "tool" => manage_tools(&load()?)?,
             "serve" => run_tcp(load()?).await?,
             "ensure-running" | "start" => {
                 println!(
@@ -79,4 +82,46 @@ fn config_args(args: &[String]) -> Vec<String> {
 fn is_config_value(args: &[String], candidate: &str) -> bool {
     args.windows(2)
         .any(|pair| pair[0] == "--config" && pair[1] == candidate)
+}
+
+#[cfg(unix)]
+fn manage_tools(
+    config: &wsl_executor_daemon::config::DaemonConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = config
+        .plugin_dir
+        .clone()
+        .or_else(default_plugin_dir)
+        .ok_or("could not resolve plugin directory")?;
+    let store = PluginStore::new(root);
+    let args = std::env::args().skip(2).collect::<Vec<_>>();
+    match args.first().map(String::as_str) {
+        Some("install") => {
+            let replace = args.iter().any(|arg| arg == "--replace");
+            let plugin = store.install(std::io::stdin().lock(), replace)?;
+            println!("{}", serde_json::to_string_pretty(&plugin)?);
+        }
+        Some("list") => {
+            let (plugins, diagnostics) = store.discover()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "plugins": plugins, "diagnostics": diagnostics })
+                )?
+            );
+        }
+        Some("enable" | "disable" | "remove") => {
+            let operation = args[0].as_str();
+            let id = args.get(1).ok_or("tool operation requires a plugin id")?;
+            match operation {
+                "enable" => store.set_enabled(id, true)?,
+                "disable" => store.set_enabled(id, false)?,
+                "remove" => store.remove(id)?,
+                _ => unreachable!(),
+            }
+            println!("{}", serde_json::json!({ "ok": true, "plugin_id": id }));
+        }
+        _ => return Err("usage: ate-daemon tool <install|list|enable|disable|remove>".into()),
+    }
+    Ok(())
 }

@@ -13,13 +13,17 @@ async fn queued_requests_honor_cancellation_and_deadline() {
     let release = Arc::new(Notify::new());
     let calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::new();
-    tools.register(HoldingTool {
-        started: Arc::clone(&started),
-        release: Arc::clone(&release),
-    });
-    tools.register(CountingTool {
-        calls: Arc::clone(&calls),
-    });
+    tools
+        .register(HoldingTool {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        })
+        .unwrap();
+    tools
+        .register(CountingTool {
+            calls: Arc::clone(&calls),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(tools, config(1));
     let holder = tokio::spawn({
         let executor = executor.clone();
@@ -57,11 +61,13 @@ async fn queued_requests_honor_cancellation_and_deadline() {
 #[tokio::test]
 async fn tool_timeout_starts_after_the_global_permit_is_acquired() {
     let mut tools = ToolRegistry::new();
-    tools.register(ProbeTool {
-        current: Arc::new(AtomicUsize::new(0)),
-        max: Arc::new(AtomicUsize::new(0)),
-        delay: Duration::from_millis(40),
-    });
+    tools
+        .register(ProbeTool {
+            current: Arc::new(AtomicUsize::new(0)),
+            max: Arc::new(AtomicUsize::new(0)),
+            delay: Duration::from_millis(40),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(
         tools,
         ExecutorConfig {
@@ -82,11 +88,13 @@ async fn tool_timeout_starts_after_the_global_permit_is_acquired() {
 #[tokio::test]
 async fn timeout_and_cancellation_are_terminal_results() {
     let mut tools = ToolRegistry::new();
-    tools.register(ProbeTool {
-        current: Arc::new(AtomicUsize::new(0)),
-        max: Arc::new(AtomicUsize::new(0)),
-        delay: Duration::from_millis(100),
-    });
+    tools
+        .register(ProbeTool {
+            current: Arc::new(AtomicUsize::new(0)),
+            max: Arc::new(AtomicUsize::new(0)),
+            delay: Duration::from_millis(100),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(
         tools,
         ExecutorConfig {

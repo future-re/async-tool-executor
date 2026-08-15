@@ -15,5 +15,9 @@
     "max_stdout": 1048576,
     "max_stderr": 1048576
   },
-  "exclusive": false
+  "exclusive": false,
+  "plugins_enabled": true,
+  "plugin_dir": null,
+  "plugin_start_timeout_ms": 5000,
+  "plugin_cancel_grace_ms": 2000
 }

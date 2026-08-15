@@ -20,7 +20,9 @@ pub enum ClientMessage {
     Cancel {
         execution_id: String,
     },
-    ListTools,
+    ListTools {
+        request_id: String,
+    },
     Shutdown,
 }
 
@@ -70,6 +72,7 @@ pub enum ServerMessage {
         found: bool,
     },
     Tools {
+        request_id: String,
         tools: Vec<ToolDescriptor>,
     },
     Failed {

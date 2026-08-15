@@ -37,7 +37,7 @@ impl Tool for StrictTool {
 #[tokio::test]
 async fn arguments_matching_the_schema_pass() {
     let mut tools = ToolRegistry::new();
-    tools.register(StrictTool);
+    tools.register(StrictTool).unwrap();
     let executor = ToolExecutor::new(tools, config(1));
 
     let result = executor
@@ -56,7 +56,7 @@ async fn arguments_matching_the_schema_pass() {
 #[tokio::test]
 async fn arguments_violating_the_schema_fail_without_invoking_the_tool() {
     let mut tools = ToolRegistry::new();
-    tools.register(StrictTool);
+    tools.register(StrictTool).unwrap();
     let executor = ToolExecutor::new(tools, config(1));
 
     for arguments in [json!({"amount": -1}), json!({}), json!({"amount": "ten"})] {

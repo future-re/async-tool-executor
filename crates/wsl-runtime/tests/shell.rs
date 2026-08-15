@@ -213,7 +213,7 @@ async fn native_shell_truncates_overflowing_stdout() {
 #[tokio::test]
 async fn shell_tool_returns_structured_results_through_the_executor() {
     let mut tools = ToolRegistry::new();
-    tools.register(ShellTool::new(native_shell()));
+    tools.register(ShellTool::new(native_shell())).unwrap();
     let executor = ToolExecutor::new(tools, config(2));
 
     let result = executor
@@ -233,7 +233,7 @@ async fn shell_tool_returns_structured_results_through_the_executor() {
 #[tokio::test]
 async fn shell_tool_nonzero_exit_is_a_result_not_an_error() {
     let mut tools = ToolRegistry::new();
-    tools.register(ShellTool::new(native_shell()));
+    tools.register(ShellTool::new(native_shell())).unwrap();
     let executor = ToolExecutor::new(tools, config(2));
 
     let result = executor
@@ -252,7 +252,7 @@ async fn shell_tool_nonzero_exit_is_a_result_not_an_error() {
 #[tokio::test]
 async fn shell_tool_spawn_failure_is_an_execution_error() {
     let mut tools = ToolRegistry::new();
-    tools.register(ShellTool::new(native_shell()));
+    tools.register(ShellTool::new(native_shell())).unwrap();
     let executor = ToolExecutor::new(tools, config(2));
 
     let result = executor
@@ -271,7 +271,7 @@ async fn shell_tool_spawn_failure_is_an_execution_error() {
 #[tokio::test]
 async fn executor_timeout_kills_the_spawned_process_tree() {
     let mut tools = ToolRegistry::new();
-    tools.register(ShellTool::new(native_shell()));
+    tools.register(ShellTool::new(native_shell())).unwrap();
     let executor = ToolExecutor::new(tools, config(1));
 
     let pid_file = std::env::temp_dir().join(format!("ate-{}.pid", std::process::id()));

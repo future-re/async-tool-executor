@@ -8,12 +8,14 @@ use std::time::Duration;
 #[tokio::test]
 async fn panic_is_isolated_for_single_and_batch_execution() {
     let mut tools = ToolRegistry::new();
-    tools.register(PanickingTool);
-    tools.register(ProbeTool {
-        current: Arc::new(AtomicUsize::new(0)),
-        max: Arc::new(AtomicUsize::new(0)),
-        delay: Duration::from_millis(1),
-    });
+    tools.register(PanickingTool).unwrap();
+    tools
+        .register(ProbeTool {
+            current: Arc::new(AtomicUsize::new(0)),
+            max: Arc::new(AtomicUsize::new(0)),
+            delay: Duration::from_millis(1),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(tools, config(2));
 
     let single = executor

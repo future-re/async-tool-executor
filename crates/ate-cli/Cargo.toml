@@ -1,0 +1,16 @@
+[package]
+name = "ate-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ate"
+path = "src/main.rs"
+
+[dependencies]
+executor-plugin = { path = "../executor-plugin" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

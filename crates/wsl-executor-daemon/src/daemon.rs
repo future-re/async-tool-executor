@@ -1,10 +1,11 @@
-use crate::config::{DaemonConfig, home_dir};
+use crate::config::{DaemonConfig, default_plugin_dir, home_dir};
 use crate::server::{Session, serve};
 use executor_core::{ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_plugin::{ExternalToolAdapter, PluginRuntimeConfig, PluginStore, PluginSupervisor};
 use executor_protocol::{PROTOCOL_VERSION, ProtocolFailure};
 use executor_tools::register_core_tools;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -72,18 +73,22 @@ impl DaemonRuntime {
         });
         let shell = NativeShell::new(NativeShellConfig {
             inherit_env: self.config.inherit_env.unwrap_or(false),
-            base_env,
+            base_env: base_env.clone(),
             cwd: Some(workspace.clone()),
             workspace_root: Some(workspace.clone()),
             limits: self.config.limits.clone().unwrap_or_default(),
         });
         let mut registry = ToolRegistry::new();
-        register_core_tools(&mut registry);
+        register_core_tools(&mut registry)
+            .map_err(|error| ProtocolFailure::new("setup_failed", error.to_string()))?;
         let mut shell_tool = ShellTool::new(shell);
         if self.config.exclusive.unwrap_or(false) {
             shell_tool = shell_tool.exclusive();
         }
-        registry.register(shell_tool);
+        registry
+            .register(shell_tool)
+            .map_err(|error| ProtocolFailure::new("setup_failed", error.to_string()))?;
+        self.register_plugins(&mut registry, &base_env)?;
         let tools = registry.list();
         let executor = ToolExecutor::new(
             registry,
@@ -102,6 +107,110 @@ impl DaemonRuntime {
             tools,
             workspace,
         })
+    }
+
+    fn register_plugins(
+        &self,
+        registry: &mut ToolRegistry,
+        base_env: &HashMap<String, String>,
+    ) -> Result<(), ProtocolFailure> {
+        if !self.config.plugins_enabled.unwrap_or(true) {
+            return Ok(());
+        }
+        let plugin_dir = self
+            .config
+            .plugin_dir
+            .clone()
+            .or_else(default_plugin_dir)
+            .ok_or_else(|| ProtocolFailure::new("plugin_setup_failed", "could not resolve plugin directory"))?;
+        let store = PluginStore::new(plugin_dir);
+        let (plugins, diagnostics) = store.discover().map_err(|error| {
+            ProtocolFailure::new(
+                "plugin_setup_failed",
+                format!("plugin discovery failed: {error}"),
+            )
+        })?;
+        for diagnostic in diagnostics {
+            eprintln!("plugin skipped: {diagnostic}");
+        }
+        let eligible = plugins
+            .into_iter()
+            .filter(|plugin| plugin.enabled)
+            .filter(|plugin| {
+                if plugin.missing_commands.is_empty() {
+                    true
+                } else {
+                    eprintln!(
+                        "plugin {} skipped; missing commands: {}",
+                        plugin.manifest.id,
+                        plugin.missing_commands.join(", ")
+                    );
+                    false
+                }
+            })
+            .collect::<Vec<_>>();
+        let builtins = registry
+            .list()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<HashSet<_>>();
+        let mut name_counts = HashMap::<String, usize>::new();
+        for plugin in &eligible {
+            for tool in &plugin.manifest.tools {
+                *name_counts.entry(tool.name.clone()).or_default() += 1;
+            }
+        }
+        for plugin in eligible {
+            let conflicts = plugin
+                .manifest
+                .tools
+                .iter()
+                .filter(|tool| {
+                    builtins.contains(&tool.name)
+                        || name_counts.get(&tool.name).copied().unwrap_or_default() > 1
+                })
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>();
+            if !conflicts.is_empty() {
+                eprintln!(
+                    "plugin {} skipped; conflicting tool names: {}",
+                    plugin.manifest.id,
+                    conflicts.join(", ")
+                );
+                continue;
+            }
+            let supervisor = PluginSupervisor::new(
+                plugin.manifest.clone(),
+                plugin.path,
+                PluginRuntimeConfig {
+                    start_timeout: std::time::Duration::from_millis(
+                        self.config.plugin_start_timeout_ms.unwrap_or(5000),
+                    ),
+                    cancel_grace: std::time::Duration::from_millis(
+                        self.config.plugin_cancel_grace_ms.unwrap_or(2000),
+                    ),
+                    base_env: base_env.clone(),
+                    memory_bytes: self
+                        .config
+                        .limits
+                        .as_ref()
+                        .and_then(|limits| limits.memory_bytes),
+                    process_count: self
+                        .config
+                        .limits
+                        .as_ref()
+                        .and_then(|limits| limits.process_count),
+                },
+            );
+            for descriptor in plugin.manifest.tools {
+                if let Err(error) =
+                    registry.register(ExternalToolAdapter::new(descriptor, supervisor.clone()))
+                {
+                    eprintln!("plugin {} skipped tool: {error}", plugin.manifest.id);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub async fn serve_stream(&self, stream: TcpStream) -> Result<(), crate::DaemonError> {

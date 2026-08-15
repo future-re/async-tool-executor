@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use executor_protocol::{ExecutionRequest, ExecutionResult};
+use executor_protocol::{ExecutionRequest, ExecutionResult, ToolDescriptor};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -54,4 +54,7 @@ pub trait ExecutionClient: Send + Sync {
     /// Returns `true` when the target execution was active and cancelled,
     /// `false` when no such execution was running.
     async fn cancel(&self, execution_id: &str) -> Result<bool, ClientError>;
+
+    /// Returns the immutable tool snapshot advertised by this guest session.
+    async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, ClientError>;
 }

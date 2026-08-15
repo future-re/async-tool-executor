@@ -11,11 +11,13 @@ async fn concurrent_tools_respect_the_limit_and_result_order() {
     let current = Arc::new(AtomicUsize::new(0));
     let max = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::new();
-    tools.register(ProbeTool {
-        current,
-        max: Arc::clone(&max),
-        delay: Duration::from_millis(20),
-    });
+    tools
+        .register(ProbeTool {
+            current,
+            max: Arc::clone(&max),
+            delay: Duration::from_millis(20),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(tools, config(3));
     let requests = (0..7)
         .map(|index| request(format!("call-{index}"), "probe"))
@@ -38,11 +40,13 @@ async fn concurrent_submissions_share_the_executor_limit() {
     let current = Arc::new(AtomicUsize::new(0));
     let max = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::new();
-    tools.register(ProbeTool {
-        current,
-        max: Arc::clone(&max),
-        delay: Duration::from_millis(15),
-    });
+    tools
+        .register(ProbeTool {
+            current,
+            max: Arc::clone(&max),
+            delay: Duration::from_millis(15),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(tools, config(2));
     let left = (0..4)
         .map(|index| request(format!("left-{index}"), "probe"))
@@ -65,16 +69,20 @@ async fn unsafe_tool_is_exclusive_across_submissions() {
     let current = Arc::new(AtomicUsize::new(0));
     let max = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::new();
-    tools.register(ProbeTool {
-        current: Arc::clone(&current),
-        max: Arc::clone(&max),
-        delay: Duration::from_millis(15),
-    });
-    tools.register(ExclusiveProbeTool {
-        current,
-        max: Arc::clone(&max),
-        delay: Duration::from_millis(15),
-    });
+    tools
+        .register(ProbeTool {
+            current: Arc::clone(&current),
+            max: Arc::clone(&max),
+            delay: Duration::from_millis(15),
+        })
+        .unwrap();
+    tools
+        .register(ExclusiveProbeTool {
+            current,
+            max: Arc::clone(&max),
+            delay: Duration::from_millis(15),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(tools, config(3));
 
     let (parallel, exclusive) = tokio::join!(
@@ -93,18 +101,24 @@ async fn queued_exclusive_tool_prevents_later_parallel_work_from_bypassing_it() 
     let release = Arc::new(Notify::new());
     let late_calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::new();
-    tools.register(HoldingTool {
-        started: Arc::clone(&started),
-        release: Arc::clone(&release),
-    });
-    tools.register(ExclusiveProbeTool {
-        current: Arc::new(AtomicUsize::new(0)),
-        max: Arc::new(AtomicUsize::new(0)),
-        delay: Duration::from_millis(5),
-    });
-    tools.register(CountingTool {
-        calls: Arc::clone(&late_calls),
-    });
+    tools
+        .register(HoldingTool {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        })
+        .unwrap();
+    tools
+        .register(ExclusiveProbeTool {
+            current: Arc::new(AtomicUsize::new(0)),
+            max: Arc::new(AtomicUsize::new(0)),
+            delay: Duration::from_millis(5),
+        })
+        .unwrap();
+    tools
+        .register(CountingTool {
+            calls: Arc::clone(&late_calls),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(tools, config(2));
 
     let holder = tokio::spawn({
