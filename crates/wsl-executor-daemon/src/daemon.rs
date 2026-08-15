@@ -305,6 +305,23 @@ pub async fn ensure_running(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Detach into a fresh session so the daemon survives the wsl.exe
+    // invocation that started it. Without setsid the child stays in the
+    // caller's process group and gets killed the moment the wsl.exe
+    // session ends.
+    #[cfg(unix)]
+    // SAFETY: setsid() only reparents the child's session and process-group
+    // ids; it touches no process memory. pre_exec runs after fork, so only
+    // the daemon child is affected.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     command.spawn()?;
     for _ in 0..100 {
         if let Some(state) = read_healthy_state().await {
