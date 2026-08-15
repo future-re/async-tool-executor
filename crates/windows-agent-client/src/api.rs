@@ -42,5 +42,8 @@ pub trait ExecutionClient: Send + Sync {
         timeout: Option<Duration>,
     ) -> Result<ExecutionResult, ClientError>;
 
-    async fn cancel(&self, execution_id: &str) -> Result<(), ClientError>;
+    /// Requests cancellation and waits for the guest to acknowledge it.
+    /// Returns `true` when the target execution was active and cancelled,
+    /// `false` when no such execution was running.
+    async fn cancel(&self, execution_id: &str) -> Result<bool, ClientError>;
 }

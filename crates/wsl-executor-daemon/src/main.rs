@@ -1,36 +1,45 @@
 use executor_core::{ExecutorConfig, ToolExecutor, ToolRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
+use wsl_executor_daemon::config::load;
 use wsl_executor_daemon::serve;
-use wsl_runtime::{NativeShell, NativeShellConfig, ResourceLimits, ShellTool};
+use wsl_runtime::{NativeShell, NativeShellConfig, ShellTool};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cwd = std::env::current_dir()?;
-    let base_env = HashMap::from([
-        (
-            "PATH".to_string(),
-            "/usr/local/bin:/usr/bin:/bin".to_string(),
-        ),
-        ("LANG".to_string(), "C.UTF-8".to_string()),
-    ]);
+    let config = load()?;
+    let cwd = config.cwd.clone().unwrap_or(std::env::current_dir()?);
+
+    let base_env = config.base_env.clone().unwrap_or_else(|| {
+        HashMap::from([
+            (
+                "PATH".to_string(),
+                "/usr/local/bin:/usr/bin:/bin".to_string(),
+            ),
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+        ])
+    });
     let shell = NativeShell::new(NativeShellConfig {
-        inherit_env: false,
+        inherit_env: config.inherit_env.unwrap_or(false),
         base_env,
         cwd: Some(cwd.clone()),
-        limits: ResourceLimits::default(),
+        limits: config.limits.clone().unwrap_or_default(),
     });
 
     let mut registry = ToolRegistry::new();
-    registry.register(ShellTool::new(shell));
+    let mut tool = ShellTool::new(shell);
+    if config.exclusive.unwrap_or(false) {
+        tool = tool.exclusive();
+    }
+    registry.register(tool);
     let tools = registry.list();
     let executor = ToolExecutor::new(
         registry,
         ExecutorConfig {
             cwd,
             env: Arc::new(HashMap::new()),
-            tool_timeout: None,
-            concurrency_limit: 4,
+            tool_timeout: config.tool_timeout_ms.map(std::time::Duration::from_millis),
+            concurrency_limit: config.concurrency_limit.unwrap_or(4),
         },
     );
 

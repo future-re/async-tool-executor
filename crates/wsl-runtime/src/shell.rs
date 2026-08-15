@@ -7,6 +7,7 @@
 
 use async_trait::async_trait;
 use executor_core::{ExecutionError, Tool, ToolContext, ToolDefinition, ToolOutput};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,7 +16,8 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// Sandbox resource ceilings applied to a spawned process.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct ResourceLimits {
     /// Virtual memory ceiling per process (`RLIMIT_AS`), in bytes.
     pub memory_bytes: Option<u64>,
@@ -173,16 +175,9 @@ impl Tool for ShellTool {
     }
 
     fn invocation_detail(&self, arguments: &Value) -> String {
-        arguments
-            .get("argv")
-            .and_then(Value::as_array)
-            .map(|argv| {
-                argv.iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .unwrap_or_else(|| self.name.clone())
+        argv_from(arguments)
+            .map(|argv| argv.join(" "))
+            .unwrap_or_else(|_| self.name.clone())
     }
 
     async fn invoke(
@@ -190,24 +185,7 @@ impl Tool for ShellTool {
         arguments: Value,
         context: ToolContext,
     ) -> Result<ToolOutput, ExecutionError> {
-        let argv = arguments
-            .get("argv")
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .ok_or_else(|| {
-                ExecutionError::Other("shell: `argv` must be a non-empty array".into())
-            })?;
-        if argv.is_empty() {
-            return Err(ExecutionError::Other(
-                "shell: `argv` must not be empty".into(),
-            ));
-        }
+        let argv = argv_from(&arguments)?;
 
         let mut env = HashMap::new();
         if let Some(entries) = arguments.get("env").and_then(Value::as_object) {
@@ -247,4 +225,25 @@ impl Tool for ShellTool {
             "duration_ms": output.duration.as_millis(),
         })))
     }
+}
+
+/// Extracts the required non-empty `argv` array. Shared by the tool's schema
+/// validation entry points so the argument shape is checked once.
+fn argv_from(arguments: &Value) -> Result<Vec<String>, ExecutionError> {
+    let argv = arguments
+        .get("argv")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ExecutionError::Other("shell: `argv` must be a non-empty array".into()))?;
+    if argv.is_empty() {
+        return Err(ExecutionError::Other(
+            "shell: `argv` must not be empty".into(),
+        ));
+    }
+    argv.iter()
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                ExecutionError::Other("shell: `argv` entries must be strings".into())
+            })
+        })
+        .collect()
 }

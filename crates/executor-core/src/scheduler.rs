@@ -144,6 +144,7 @@ async fn run_one(
             )
         }
     };
+    // Release the permit so the next queued request can start.
     drop(permit);
     (index, result)
 }
@@ -155,7 +156,7 @@ async fn acquire_permit(
     deadline: Option<Instant>,
     cancellation: &CancellationToken,
 ) -> Result<OwnedSemaphorePermit, ExecutionError> {
-    let wait = async {
+    let wait_for_permit = async {
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => Err(ExecutionError::Cancelled {
@@ -172,14 +173,14 @@ async fn acquire_permit(
     };
 
     match deadline {
-        Some(deadline) => {
-            tokio::time::timeout_at(deadline, wait)
-                .await
-                .map_err(|_| ExecutionError::TimedOut {
+        Some(deadline) => tokio::time::timeout_at(deadline, wait_for_permit)
+            .await
+            .unwrap_or_else(|_| {
+                Err(ExecutionError::TimedOut {
                     message: "execution deadline exceeded while queued".into(),
-                })?
-        }
-        None => wait.await,
+                })
+            }),
+        None => wait_for_permit.await,
     }
 }
 
@@ -217,6 +218,8 @@ fn tool_context(
         execution_id: request.id.clone(),
         cwd: config.cwd.clone(),
         env: Arc::clone(&config.env),
+        // Set after the permit is acquired so queued requests do not count
+        // the wait time against the execution deadline.
         deadline: None,
         cancellation: options.cancellation().child_token(),
         progress: ProgressReporter::new(observer, request.id.clone(), request.tool.clone()),

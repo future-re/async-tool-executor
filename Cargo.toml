@@ -35,3 +35,7 @@ tracing = "0.1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
+
+[profile.release]
+lto = true
+strip = true

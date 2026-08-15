@@ -13,10 +13,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 type PendingResult = oneshot::Sender<Result<ExecutionResult, ClientError>>;
+type CancelAck = oneshot::Sender<bool>;
 
 pub struct WslClient {
     requests: mpsc::UnboundedSender<ClientMessage>,
     pending: Arc<Mutex<HashMap<String, PendingResult>>>,
+    cancel_acks: Arc<Mutex<HashMap<String, CancelAck>>>,
     child: Child,
     writer_task: JoinHandle<()>,
     reader_task: JoinHandle<()>,
@@ -76,6 +78,8 @@ impl WslClient {
         });
         let pending = Arc::new(Mutex::new(HashMap::<String, PendingResult>::new()));
         let reader_pending = Arc::clone(&pending);
+        let cancel_acks = Arc::new(Mutex::new(HashMap::<String, CancelAck>::new()));
+        let reader_cancel_acks = Arc::clone(&cancel_acks);
         let reader_task = tokio::spawn(async move {
             loop {
                 let message = match read_frame(&mut stdout, DEFAULT_MAX_FRAME_SIZE).await {
@@ -107,6 +111,18 @@ impl WslClient {
                             }));
                         }
                     }
+                    ServerMessage::CancelAcknowledged {
+                        execution_id,
+                        found,
+                    } => {
+                        if let Some(sender) = reader_cancel_acks
+                            .lock()
+                            .expect("cancel ack map poisoned")
+                            .remove(&execution_id)
+                        {
+                            let _ = sender.send(found);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -118,11 +134,21 @@ impl WslClient {
             {
                 let _ = sender.send(Err(ClientError::Disconnected));
             }
+            for (_, sender) in reader_cancel_acks
+                .lock()
+                .expect("cancel ack map poisoned")
+                .drain()
+            {
+                // Dropping the sender makes the awaiting `cancel` see a closed
+                // channel and report `Disconnected` instead of a spurious ack.
+                drop(sender);
+            }
         });
 
         Ok(Self {
             requests,
             pending,
+            cancel_acks,
             child,
             writer_task,
             reader_task,
@@ -166,12 +192,23 @@ impl ExecutionClient for WslClient {
         result_rx.await.unwrap_or(Err(ClientError::Disconnected))
     }
 
-    async fn cancel(&self, execution_id: &str) -> Result<(), ClientError> {
-        self.requests
+    async fn cancel(&self, execution_id: &str) -> Result<bool, ClientError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let mut acks = self.cancel_acks.lock().expect("cancel ack map poisoned");
+        acks.insert(execution_id.to_string(), ack_tx);
+
+        if self
+            .requests
             .send(ClientMessage::Cancel {
                 execution_id: execution_id.to_string(),
             })
-            .map_err(|_| ClientError::Disconnected)
+            .is_err()
+        {
+            acks.remove(execution_id);
+            return Err(ClientError::Disconnected);
+        }
+
+        ack_rx.await.map_err(|_| ClientError::Disconnected)
     }
 }
 

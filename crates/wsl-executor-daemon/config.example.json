@@ -1,0 +1,18 @@
+{
+  "cwd": "/home",
+  "concurrency_limit": 4,
+  "tool_timeout_ms": 30000,
+  "inherit_env": false,
+  "base_env": {
+    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "LANG": "C.UTF-8"
+  },
+  "limits": {
+    "memory_bytes": 1073741824,
+    "cpu_seconds": 30,
+    "process_count": 64,
+    "max_stdout": 1048576,
+    "max_stderr": 1048576
+  },
+  "exclusive": false
+}
