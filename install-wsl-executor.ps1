@@ -44,6 +44,10 @@ distribution's glibc.
 Copy crates/wsl-executor-daemon/config.example.json to ~/.config/ate/config.json
 when no config exists yet.
 
+.PARAMETER WorkspaceRoot
+Absolute WSL ext4 directory allowed to contain client workspaces. Defaults to
+~/code and is used when installing the default config.
+
 .PARAMETER InstallTools
 Allow the script to install missing Windows-side tools (cargo-zigbuild) when
 cross-compiling. Without this, the script only reports the command to run.
@@ -67,6 +71,7 @@ param(
     [ValidateSet("musl", "gnu")]
     [string]$CrossTarget = "musl",
     [switch]$InstallConfig,
+    [string]$WorkspaceRoot = "~/code",
     [switch]$InstallTools,
     [string]$BuildDir
 )
@@ -178,6 +183,12 @@ if ($GuestProgram.StartsWith("~/") -or $GuestProgram -eq "~") {
 if (-not $GuestProgram.StartsWith("/")) {
     throw "GuestProgram must be an absolute Linux path inside WSL, got: $GuestProgram"
 }
+if ($WorkspaceRoot.StartsWith("~/") -or $WorkspaceRoot -eq "~") {
+    $WorkspaceRoot = $WorkspaceRoot -replace '^~', $wslHome
+}
+if (-not $WorkspaceRoot.StartsWith("/") -or $WorkspaceRoot.StartsWith("/mnt/")) {
+    throw "WorkspaceRoot must be an absolute WSL ext4 path outside /mnt, got: $WorkspaceRoot"
+}
 
 $wslCargo = $true
 try {
@@ -267,17 +278,18 @@ switch ($mode) {
 
 Write-Host "Installing guest daemon to $GuestProgram ..."
 $guestDir = Split-Path -Parent $GuestProgram
+Invoke-Wsl "[ ! -x '$GuestProgram' ] || '$GuestProgram' stop >/dev/null 2>&1 || true"
 Invoke-Wsl "mkdir -p '$guestDir' && install -m 755 '$installSource' '$GuestProgram'"
 
 if ($InstallConfig) {
     $configDest = "$wslHome/.config/ate/config.json"
     $configSrc = ConvertTo-WslPath (Join-Path $root "crates\wsl-executor-daemon\config.example.json")
     Write-Host "Installing default config to $configDest (skipped if present) ..."
-    Invoke-Wsl "mkdir -p '$wslHome/.config/ate' && [ -f '$configDest' ] || cp '$configSrc' '$configDest'"
+    Invoke-Wsl "mkdir -p '$wslHome/.config/ate' '$WorkspaceRoot' && [ -f '$configDest' ] || sed 's|/home/<user>/code|$WorkspaceRoot|' '$configSrc' > '$configDest'"
 }
 
 Write-Host "Smoke-testing '$GuestProgram' ..."
-Invoke-Wsl "'$GuestProgram' < /dev/null && echo 'daemon OK'"
+Invoke-Wsl "'$GuestProgram' ensure-running >/dev/null && '$GuestProgram' status >/dev/null && echo 'daemon OK'"
 
 Write-Host "Done. The Windows client connects with:"
-Write-Host "  WslClientConfig { distribution: `"$Distribution`", guest_program: `"$GuestProgram`" }"
+Write-Host "  WslClientConfig { distribution: `"$Distribution`", guest_program: `"$GuestProgram`", workspace: `"$WorkspaceRoot/my-project`" }"

@@ -3,6 +3,7 @@ use executor_core::{ExecutorConfig, SubmissionControls, ToolExecutor, ToolRegist
 use executor_protocol::ExecutionRequest;
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -95,6 +96,30 @@ async fn native_shell_runs_in_the_requested_working_directory() {
         .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(output.stdout.trim(), dir.to_str().unwrap());
+}
+
+#[tokio::test]
+async fn native_shell_rejects_cwd_outside_workspace() {
+    let workspace = std::env::temp_dir().join(format!("ate-workspace-{}", std::process::id()));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = NativeShell::new(NativeShellConfig {
+        workspace_root: Some(workspace.clone()),
+        cwd: Some(workspace.clone()),
+        ..NativeShellConfig::default()
+    });
+    let result = shell
+        .run(
+            CommandSpec {
+                argv: vec!["pwd".into()],
+                cwd: Some(PathBuf::from("/")),
+                env: HashMap::new(),
+                limits: ResourceLimits::default(),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+    std::fs::remove_dir_all(workspace).unwrap();
+    assert!(result.is_err());
 }
 
 #[tokio::test]

@@ -2,7 +2,7 @@ use crate::{ExecutionRequest, ExecutionResult, ToolDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Messages sent from the Windows agent to the WSL executor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -10,6 +10,8 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub enum ClientMessage {
     Hello {
         protocol_version: u32,
+        token: String,
+        workspace: String,
     },
     Execute {
         request: ExecutionRequest,
@@ -44,6 +46,7 @@ impl ProtocolFailure {
 pub enum ServerMessage {
     HelloAck {
         protocol_version: u32,
+        workspace: String,
     },
     Accepted {
         execution_id: String,

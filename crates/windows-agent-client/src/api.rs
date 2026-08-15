@@ -7,13 +7,19 @@ use std::time::Duration;
 pub struct WslClientConfig {
     pub distribution: String,
     pub guest_program: PathBuf,
+    pub workspace: String,
 }
 
 impl WslClientConfig {
-    pub fn new(distribution: impl Into<String>, guest_program: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        distribution: impl Into<String>,
+        guest_program: impl Into<PathBuf>,
+        workspace: impl Into<String>,
+    ) -> Self {
         Self {
             distribution: distribution.into(),
             guest_program: guest_program.into(),
+            workspace: workspace.into(),
         }
     }
 }
@@ -24,6 +30,8 @@ pub enum ClientError {
     UnsupportedPlatform,
     #[error("failed to start WSL executor: {0}")]
     Spawn(String),
+    #[error("invalid WSL workspace: {0}")]
+    InvalidWorkspace(String),
     #[error("protocol handshake failed: {0}")]
     Handshake(String),
     #[error("transport disconnected")]

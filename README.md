@@ -8,9 +8,11 @@ runtime hosted in WSL.
 ```text
 Windows Agent
     └── windows-agent-client
-            │ length-prefixed JSON over wsl.exe stdio
+            │ wsl.exe bootstrap (start/discover)
+            │ length-prefixed JSON over localhost TCP
             ▼
-        wsl-executor-daemon
+        persistent wsl-executor-daemon
+            ├── one isolated session per connection/workspace
             ├── executor-protocol
             ├── executor-core
             └── wsl-runtime
@@ -23,8 +25,8 @@ Windows Agent
 | `executor-core` | Tool registry, scheduling, concurrency, timeout, cancellation and observation |
 | `executor-tools` | Platform-neutral base tools: `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch` |
 | `wsl-runtime` | Linux process execution, resource limits and process-group cleanup |
-| `wsl-executor-daemon` | WSL stdio server, handshake and active-task lifecycle |
-| `windows-agent-client` | Windows API and `wsl.exe` process transport |
+| `wsl-executor-daemon` | Persistent WSL loopback service, authentication and per-workspace sessions |
+| `windows-agent-client` | Windows API, WSL service discovery and TCP transport |
 
 The Windows side submits tool requests. Tool resolution, scheduling and process
 execution remain on the WSL side, so the Windows client does not act as a remote
@@ -65,19 +67,23 @@ Registered tools appear in `ToolRegistry::list()`, which the daemon serves over
 cargo test --workspace
 ```
 
-Run the guest daemon inside WSL with framed protocol messages on stdin/stdout:
+Run or manage the persistent guest daemon inside WSL:
 
 ```bash
-cargo run -p wsl-executor-daemon
+cargo run -p wsl-executor-daemon -- ensure-running
+cargo run -p wsl-executor-daemon -- status
+cargo run -p wsl-executor-daemon -- stop
 ```
 
-The protocol currently supports handshake, execute, cancel, tool discovery,
-progress events, terminal results and graceful shutdown.
+`stdio` remains available for compatibility and protocol tests. The TCP service
+binds only to WSL loopback, stores its port, PID, protocol version and random
+authentication token in `~/.local/state/ate/daemon.json` (mode 0600), and uses
+a file lock to serialize concurrent starts.
 
 ## Deploying the guest daemon in WSL
 
-The daemon is launched per connection by the Windows client, so installing it
-means placing the binary at a fixed path and pointing the client at it.
+The Windows client uses a short `wsl.exe ... ensure-running` call to start or
+discover the daemon, then keeps a TCP connection open for the workspace session.
 
 Run `install-wsl-executor.ps1` from Windows; it handles everything:
 
@@ -85,6 +91,7 @@ Run `install-wsl-executor.ps1` from Windows; it handles everything:
 .\install-wsl-executor.ps1                     # auto-selects build strategy
 .\install-wsl-executor.ps1 -BuildMode cross    # build from Windows, no Rust in WSL
 .\install-wsl-executor.ps1 -InstallConfig      # also install a default config
+.\install-wsl-executor.ps1 -InstallConfig -WorkspaceRoot /home/me/code
 ```
 
 Two build strategies are supported, selected automatically (`-BuildMode auto`):
@@ -116,10 +123,12 @@ A missing file falls back to defaults; a file that exists but is malformed is a
 hard error. See `crates/wsl-executor-daemon/config.example.json` for every
 supported field.
 
-Smoke-test the installed binary against a real protocol session:
+Manage the installed service:
 
 ```bash
-~/.local/bin/ate-daemon < /dev/null   # exits cleanly on EOF, validating startup
+~/.local/bin/ate-daemon ensure-running
+~/.local/bin/ate-daemon status
+~/.local/bin/ate-daemon stop
 ```
 
 On the Windows side, connect with:
@@ -130,6 +139,15 @@ use windows_agent_client::{WslClient, WslClientConfig};
 let client = WslClient::connect(WslClientConfig {
     distribution: "Ubuntu".into(),
     guest_program: "/home/<user>/.local/bin/ate-daemon".into(),
+    workspace: "/home/<user>/code/my-project".into(),
 })
 .await?;
 ```
+
+The workspace must be an existing absolute Linux path under `workspace_root`.
+The daemon canonicalizes it and rejects `/mnt`, DrvFS/9P, and symlink escapes.
+Each connection gets its own executor, cancellation map and file-read state;
+the configured global concurrency limit is shared across all sessions. Shell
+working directories are independently canonicalized before process spawn and
+cannot escape the session workspace. Projects, Git data, dependencies and build
+outputs remain on WSL ext4; no file synchronization protocol is involved.

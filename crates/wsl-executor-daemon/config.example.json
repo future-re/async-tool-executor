@@ -1,6 +1,7 @@
 {
-  "cwd": "/home",
+  "workspace_root": "/home/<user>/code",
   "concurrency_limit": 4,
+  "global_concurrency_limit": 8,
   "tool_timeout_ms": 30000,
   "inherit_env": false,
   "base_env": {

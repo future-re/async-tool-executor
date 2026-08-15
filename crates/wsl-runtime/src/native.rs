@@ -30,6 +30,8 @@ pub struct NativeShellConfig {
     pub base_env: HashMap<String, String>,
     /// Fallback working directory when a command does not set one.
     pub cwd: Option<PathBuf>,
+    /// Canonical workspace boundary for every command working directory.
+    pub workspace_root: Option<PathBuf>,
     /// Default resource ceilings applied to every command.
     pub limits: ResourceLimits,
 }
@@ -83,7 +85,7 @@ impl NativeShell {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        if let Some(cwd) = spec.cwd.clone().or_else(|| self.config.cwd.clone()) {
+        if let Some(cwd) = self.resolve_cwd(spec)? {
             command.current_dir(&cwd);
         }
 
@@ -115,6 +117,40 @@ impl NativeShell {
         command
             .spawn()
             .map_err(|error| ExecutionError::Other(format!("spawn `{program}` failed: {error}")))
+    }
+
+    fn resolve_cwd(&self, spec: &CommandSpec) -> Result<Option<PathBuf>, ExecutionError> {
+        let Some(workspace) = &self.config.workspace_root else {
+            return Ok(spec.cwd.clone().or_else(|| self.config.cwd.clone()));
+        };
+        let workspace = std::fs::canonicalize(workspace).map_err(|error| {
+            ExecutionError::Other(format!("failed to canonicalize shell workspace: {error}"))
+        })?;
+        let requested = spec
+            .cwd
+            .as_ref()
+            .map(|cwd| {
+                if cwd.is_absolute() {
+                    cwd.clone()
+                } else {
+                    workspace.join(cwd)
+                }
+            })
+            .or_else(|| self.config.cwd.clone())
+            .unwrap_or_else(|| workspace.clone());
+        let canonical = std::fs::canonicalize(&requested).map_err(|error| {
+            ExecutionError::Other(format!(
+                "invalid shell cwd {}: {error}",
+                requested.display()
+            ))
+        })?;
+        if !canonical.starts_with(&workspace) {
+            return Err(ExecutionError::Other(format!(
+                "shell cwd escapes workspace: {}",
+                requested.display()
+            )));
+        }
+        Ok(Some(canonical))
     }
 }
 

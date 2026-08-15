@@ -7,7 +7,8 @@ use executor_protocol::{
 use executor_tools::register_core_tools;
 use std::collections::HashMap;
 use std::sync::Arc;
-use wsl_executor_daemon::serve;
+use tokio::sync::Semaphore;
+use wsl_executor_daemon::{Session, serve};
 use wsl_runtime::{NativeShell, NativeShellConfig, ShellTool};
 
 #[tokio::test]
@@ -36,7 +37,7 @@ async fn tool_discovery_reports_base_tools_plus_shell() {
     let executor = ToolExecutor::new(
         registry.clone(),
         ExecutorConfig {
-            cwd,
+            cwd: cwd.clone(),
             env: Arc::new(HashMap::new()),
             concurrency_limit: 2,
             ..Default::default()
@@ -46,12 +47,28 @@ async fn tool_discovery_reports_base_tools_plus_shell() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (mut client_read, mut client_write) = tokio::io::split(client);
     let (server_read, server_write) = tokio::io::split(server);
-    let daemon = tokio::spawn(serve(server_read, server_write, executor, tools));
+    let session_cwd = cwd.clone();
+    let daemon = tokio::spawn(serve(
+        server_read,
+        server_write,
+        move |token, workspace| {
+            assert_eq!(token, "test-token");
+            assert_eq!(workspace, session_cwd.to_str().unwrap());
+            Ok(Session {
+                executor,
+                tools,
+                workspace: session_cwd,
+            })
+        },
+        Arc::new(Semaphore::new(4)),
+    ));
 
     write_frame(
         &mut client_write,
         &ClientMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
+            token: "test-token".into(),
+            workspace: cwd.to_string_lossy().into_owned(),
         },
     )
     .await
@@ -106,7 +123,7 @@ async fn protocol_request_reaches_the_wsl_executor_and_returns_a_result() {
     let executor = ToolExecutor::new(
         registry,
         ExecutorConfig {
-            cwd,
+            cwd: cwd.clone(),
             env: Arc::new(HashMap::new()),
             concurrency_limit: 2,
             ..Default::default()
@@ -116,12 +133,28 @@ async fn protocol_request_reaches_the_wsl_executor_and_returns_a_result() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (mut client_read, mut client_write) = tokio::io::split(client);
     let (server_read, server_write) = tokio::io::split(server);
-    let daemon = tokio::spawn(serve(server_read, server_write, executor, tools));
+    let session_cwd = cwd.clone();
+    let daemon = tokio::spawn(serve(
+        server_read,
+        server_write,
+        move |token, workspace| {
+            assert_eq!(token, "test-token");
+            assert_eq!(workspace, session_cwd.to_str().unwrap());
+            Ok(Session {
+                executor,
+                tools,
+                workspace: session_cwd,
+            })
+        },
+        Arc::new(Semaphore::new(4)),
+    ));
 
     write_frame(
         &mut client_write,
         &ClientMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
+            token: "test-token".into(),
+            workspace: cwd.to_string_lossy().into_owned(),
         },
     )
     .await

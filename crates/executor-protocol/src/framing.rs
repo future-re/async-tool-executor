@@ -68,6 +68,8 @@ mod tests {
     async fn messages_round_trip_through_length_delimited_json() {
         let expected = ClientMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
+            token: "test-token".into(),
+            workspace: "/home/test/project".into(),
         };
         let (mut client, mut server) = tokio::io::duplex(1024);
 

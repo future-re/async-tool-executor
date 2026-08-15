@@ -5,10 +5,10 @@ use executor_protocol::{
     ServerMessage, read_frame, write_frame,
 };
 use std::collections::HashMap;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::process::{Child, Command};
+use tokio::net::TcpStream;
+use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -19,37 +19,53 @@ pub struct WslClient {
     requests: mpsc::UnboundedSender<ClientMessage>,
     pending: Arc<Mutex<HashMap<String, PendingResult>>>,
     cancel_acks: Arc<Mutex<HashMap<String, CancelAck>>>,
-    child: Child,
     writer_task: JoinHandle<()>,
     reader_task: JoinHandle<()>,
 }
 
 impl WslClient {
     pub async fn connect(config: WslClientConfig) -> Result<Self, ClientError> {
-        let mut child = Command::new("wsl.exe")
+        if !config.workspace.starts_with('/') {
+            return Err(ClientError::InvalidWorkspace(
+                "expected an absolute Linux path".into(),
+            ));
+        }
+        let output = Command::new("wsl.exe")
             .arg("--distribution")
-            .arg(config.distribution)
+            .arg(&config.distribution)
             .arg("--exec")
-            .arg(config.guest_program)
-            .kill_on_drop(true)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+            .arg(&config.guest_program)
+            .arg("ensure-running")
+            .output()
+            .await
             .map_err(|error| ClientError::Spawn(error.to_string()))?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| ClientError::Spawn("WSL stdin was not piped".into()))?;
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| ClientError::Spawn("WSL stdout was not piped".into()))?;
+        if !output.status.success() {
+            return Err(ClientError::Spawn(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        let state: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .map_err(|error| ClientError::Spawn(format!("invalid daemon state: {error}")))?;
+        let port = state["port"]
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok())
+            .ok_or_else(|| ClientError::Spawn("daemon state has no valid port".into()))?;
+        let token = state["token"]
+            .as_str()
+            .ok_or_else(|| ClientError::Spawn("daemon state has no token".into()))?;
+        let stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .map_err(|error| {
+                ClientError::Spawn(format!("cannot connect to WSL daemon: {error}"))
+            })?;
+        let (mut stdout, mut stdin) = stream.into_split();
 
         write_frame(
             &mut stdin,
             &ClientMessage::Hello {
                 protocol_version: PROTOCOL_VERSION,
+                token: token.to_string(),
+                workspace: config.workspace.clone(),
             },
         )
         .await
@@ -60,7 +76,8 @@ impl WslClient {
         if !matches!(
             hello,
             Some(ServerMessage::HelloAck {
-                protocol_version: PROTOCOL_VERSION
+                protocol_version: PROTOCOL_VERSION,
+                ..
             })
         ) {
             return Err(ClientError::Handshake(format!(
@@ -149,7 +166,6 @@ impl WslClient {
             requests,
             pending,
             cancel_acks,
-            child,
             writer_task,
             reader_task,
         })
@@ -216,7 +232,7 @@ impl ExecutionClient for WslClient {
 
 impl Drop for WslClient {
     fn drop(&mut self) {
-        let _ = self.child.start_kill();
+        let _ = self.requests.send(ClientMessage::Shutdown);
         self.writer_task.abort();
         self.reader_task.abort();
     }

@@ -8,10 +8,13 @@ use wsl_runtime::ResourceLimits;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DaemonConfig {
-    /// Working directory for executed commands and the executor.
-    pub cwd: Option<PathBuf>,
-    /// Maximum concurrent executions.
+    /// Parent directory containing every workspace accepted by this daemon.
+    #[serde(alias = "cwd")]
+    pub workspace_root: Option<PathBuf>,
+    /// Maximum concurrent executions in one client session.
     pub concurrency_limit: Option<usize>,
+    /// Maximum concurrent executions across all client sessions.
+    pub global_concurrency_limit: Option<usize>,
     /// Hard timeout applied to every execution, in milliseconds.
     pub tool_timeout_ms: Option<u64>,
     /// Whether commands inherit the parent process environment.
@@ -76,7 +79,7 @@ fn find_path() -> Result<Option<PathBuf>, ConfigError> {
 /// absolute path. `wsl.exe --exec` inherits a mangled Windows profile value
 /// (e.g. `C:Usersfutur`) for `HOME`, so a non-absolute `HOME` is ignored in
 /// favour of the passwd entry, which always yields a real Linux home.
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     match home {
         Some(path) if path.is_absolute() => Some(path),

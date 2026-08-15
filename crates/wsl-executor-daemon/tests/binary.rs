@@ -14,7 +14,12 @@ use tokio::process::Command;
 async fn daemon_binary_serves_a_protocol_session_over_stdio() {
     let config_path =
         std::env::temp_dir().join(format!("ate-daemon-test-{}.json", std::process::id()));
-    std::fs::write(&config_path, "{}").expect("write test config");
+    let workspace = std::env::temp_dir();
+    std::fs::write(
+        &config_path,
+        serde_json::json!({"workspace_root": workspace}).to_string(),
+    )
+    .expect("write test config");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_wsl-executor-daemon"))
         .arg("--config")
@@ -34,6 +39,8 @@ async fn daemon_binary_serves_a_protocol_session_over_stdio() {
             &mut stdin,
             &ClientMessage::Hello {
                 protocol_version: PROTOCOL_VERSION,
+                token: "stdio".into(),
+                workspace: workspace.to_string_lossy().into_owned(),
             },
         )
         .await

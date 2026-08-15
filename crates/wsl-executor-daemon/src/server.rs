@@ -6,10 +6,11 @@ use executor_protocol::{
     ServerMessage, read_frame, write_frame,
 };
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +20,12 @@ pub enum DaemonError {
     Frame(#[from] FrameError),
     #[error("response writer task failed: {0}")]
     WriterTask(String),
+}
+
+pub struct Session {
+    pub executor: ToolExecutor,
+    pub tools: Vec<ToolDescriptor>,
+    pub workspace: PathBuf,
 }
 
 struct WireObserver {
@@ -66,8 +73,8 @@ impl ExecutionObserver for WireObserver {
 pub async fn serve<R, W>(
     mut reader: R,
     mut writer: W,
-    executor: ToolExecutor,
-    tools: Vec<ToolDescriptor>,
+    create_session: impl FnOnce(&str, &str) -> Result<Session, ProtocolFailure>,
+    global_permits: Arc<Semaphore>,
 ) -> Result<(), DaemonError>
 where
     R: AsyncRead + Unpin,
@@ -80,17 +87,15 @@ where
         }
         Ok::<_, FrameError>(())
     });
-    let executor = executor.with_observer(Arc::new(WireObserver {
-        responses: responses.clone(),
-    }));
     let active = Arc::new(Mutex::new(HashMap::<String, CancellationToken>::new()));
     let mut executions = JoinSet::new();
-    let mut negotiated = false;
+    let mut session = None;
+    let mut create_session = Some(create_session);
 
     while let Some(message) =
         read_frame::<_, ClientMessage>(&mut reader, DEFAULT_MAX_FRAME_SIZE).await?
     {
-        if !negotiated && !matches!(message, ClientMessage::Hello { .. }) {
+        if session.is_none() && !matches!(message, ClientMessage::Hello { .. }) {
             send_failure(
                 &responses,
                 None,
@@ -101,13 +106,19 @@ where
         }
 
         match message {
-            ClientMessage::Hello { protocol_version } => {
-                if protocol_version == PROTOCOL_VERSION {
-                    negotiated = true;
-                    let _ = responses.send(ServerMessage::HelloAck {
-                        protocol_version: PROTOCOL_VERSION,
-                    });
-                } else {
+            ClientMessage::Hello {
+                protocol_version,
+                token,
+                workspace,
+            } => {
+                if session.is_some() {
+                    send_failure(
+                        &responses,
+                        None,
+                        "duplicate_hello",
+                        "session is already established",
+                    );
+                } else if protocol_version != PROTOCOL_VERSION {
                     send_failure(
                         &responses,
                         None,
@@ -116,12 +127,42 @@ where
                             "host requested protocol {protocol_version}, guest supports {PROTOCOL_VERSION}"
                         ),
                     );
+                    break;
+                } else {
+                    let factory = create_session.take().expect("session factory available");
+                    match factory(&token, &workspace) {
+                        Ok(created) => {
+                            let canonical_workspace = created.workspace.display().to_string();
+                            session = Some(Session {
+                                executor: created.executor.with_observer(Arc::new(WireObserver {
+                                    responses: responses.clone(),
+                                })),
+                                ..created
+                            });
+                            let _ = responses.send(ServerMessage::HelloAck {
+                                protocol_version: PROTOCOL_VERSION,
+                                workspace: canonical_workspace,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = responses.send(ServerMessage::Failed {
+                                execution_id: None,
+                                error,
+                            });
+                            break;
+                        }
+                    }
                 }
             }
             ClientMessage::Execute {
                 request,
                 timeout_ms,
             } => {
+                let executor = session
+                    .as_ref()
+                    .expect("handshake checked")
+                    .executor
+                    .clone();
                 let execution_id = request.id.clone();
                 let cancellation = CancellationToken::new();
                 let inserted = {
@@ -146,15 +187,21 @@ where
                 let _ = responses.send(ServerMessage::Accepted {
                     execution_id: execution_id.clone(),
                 });
-                let executor = executor.clone();
                 let responses = responses.clone();
                 let active = Arc::clone(&active);
+                let global_permits = Arc::clone(&global_permits);
                 executions.spawn(async move {
+                    let wait_cancellation = cancellation.clone();
                     let mut options = SubmissionControls::new().with_cancellation(cancellation);
                     if let Some(timeout_ms) = timeout_ms {
                         options = options.with_timeout(Duration::from_millis(timeout_ms));
                     }
+                    let permit = tokio::select! {
+                        permit = global_permits.acquire_owned() => permit.ok(),
+                        _ = wait_cancellation.cancelled() => None,
+                    };
                     let result = executor.execute(request, options).await;
+                    drop(permit);
                     active
                         .lock()
                         .expect("active task map poisoned")
@@ -179,7 +226,7 @@ where
             }
             ClientMessage::ListTools => {
                 let _ = responses.send(ServerMessage::Tools {
-                    tools: tools.clone(),
+                    tools: session.as_ref().expect("handshake checked").tools.clone(),
                 });
             }
             ClientMessage::Shutdown => {
@@ -193,7 +240,6 @@ where
         cancellation.cancel();
     }
     while executions.join_next().await.is_some() {}
-    drop(executor);
     drop(responses);
 
     writer_task
