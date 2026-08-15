@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/ate-cli",
+    "crates/ate-mcp",
     "crates/executor-core",
     "crates/executor-plugin",
     "crates/executor-protocol",

@@ -57,6 +57,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ate-mcp"
+version = "0.1.0"
+dependencies = [
+ "executor-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "windows-agent-client",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
