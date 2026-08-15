@@ -21,6 +21,7 @@ Windows Agent
 | --- | --- |
 | `executor-protocol` | Versioned, platform-neutral host/guest messages and framing |
 | `executor-core` | Tool registry, scheduling, concurrency, timeout, cancellation and observation |
+| `executor-plugin` | External manifests, package installation and persistent process supervision |
 | `executor-tools` | Platform-neutral base tools: `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch` |
 | `wsl-runtime` | Linux process execution, resource limits and process-group cleanup |
 | `wsl-executor-daemon` | WSL stdio server, handshake and active-task lifecycle |
@@ -50,14 +51,44 @@ use executor_core::{ExecutorConfig, ToolExecutor, ToolRegistry};
 use executor_tools::register_core_tools;
 
 let mut registry = ToolRegistry::new();
-register_core_tools(&mut registry);
-registry.register(ShellTool::new(shell));
+register_core_tools(&mut registry)?;
+registry.register(ShellTool::new(shell))?;
 
 let executor = ToolExecutor::new(registry, ExecutorConfig::default());
 ```
 
 Registered tools appear in `ToolRegistry::list()`, which the daemon serves over
 `ListTools` capability discovery.
+
+Duplicate names are rejected at registration time instead of replacing an
+existing tool.
+
+## External plugins
+
+Trusted local plugins can be installed into a selected WSL distribution without
+recompiling the daemon. A package contains a `tool.json` manifest and an
+executable that speaks the length-prefixed JSON plugin protocol. One package may
+expose multiple tools through one lazily started persistent process.
+
+```powershell
+ate tool validate .\examples\echo-plugin
+ate tool pack .\examples\echo-plugin --output echo.atepkg
+ate tool install echo.atepkg --distribution Ubuntu
+ate tool list --distribution Ubuntu
+ate tool disable com.example.echo --distribution Ubuntu
+ate tool remove com.example.echo --distribution Ubuntu
+```
+
+Changes become visible on the next daemon connection. Packages are stored under
+`~/.local/share/ate/plugins` by default. Python, Node, and similar runtimes are
+declared through `required_commands`; ATE checks them but never installs them.
+
+External plugins currently run with the WSL user's permissions. Install only
+trusted local packages: a strong OS sandbox is deferred until the runtime's
+`SandboxPolicy` is complete.
+
+See [`examples/echo-plugin`](examples/echo-plugin) for a complete package and
+[`docs/plugin-protocol.md`](docs/plugin-protocol.md) for the wire contract.
 
 ## Development
 

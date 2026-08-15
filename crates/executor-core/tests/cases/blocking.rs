@@ -10,9 +10,11 @@ use std::time::Duration;
 async fn run_blocking_does_not_block_the_async_runtime_and_maps_failures() {
     let timer_fired = Arc::new(AtomicBool::new(false));
     let mut tools = ToolRegistry::new();
-    tools.register(BlockingProbeTool {
-        timer_fired: Arc::clone(&timer_fired),
-    });
+    tools
+        .register(BlockingProbeTool {
+            timer_fired: Arc::clone(&timer_fired),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(tools, config(1));
     let timer = {
         let timer_fired = Arc::clone(&timer_fired);
@@ -54,9 +56,11 @@ async fn run_blocking_does_not_block_the_async_runtime_and_maps_failures() {
 async fn blocking_work_receives_cooperative_cancellation_after_timeout() {
     let stopped = Arc::new(AtomicBool::new(false));
     let mut tools = ToolRegistry::new();
-    tools.register(CooperativeBlockingTool {
-        stopped: Arc::clone(&stopped),
-    });
+    tools
+        .register(CooperativeBlockingTool {
+            stopped: Arc::clone(&stopped),
+        })
+        .unwrap();
     let executor = ToolExecutor::new(
         tools,
         ExecutorConfig {

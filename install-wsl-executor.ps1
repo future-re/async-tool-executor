@@ -53,6 +53,12 @@ Override the build directory. For native builds this is a Linux path inside
 WSL (default: ~/.cache/ate/target). For cross builds it is a Windows path
 (default: %LOCALAPPDATA%\ate-cross-target).
 
+.PARAMETER SkipClient
+Skip building and installing the Windows ate.exe tool-management CLI.
+
+.PARAMETER ClientInstallDir
+Windows destination for ate.exe. Defaults to %LOCALAPPDATA%\ate\bin.
+
 .EXAMPLE
 .\install-wsl-executor.ps1
 .\install-wsl-executor.ps1 -Distribution Ubuntu -InstallConfig
@@ -68,7 +74,9 @@ param(
     [string]$CrossTarget = "musl",
     [switch]$InstallConfig,
     [switch]$InstallTools,
-    [string]$BuildDir
+    [string]$BuildDir,
+    [switch]$SkipClient,
+    [string]$ClientInstallDir = "$env:LOCALAPPDATA\ate\bin"
 )
 
 $ErrorActionPreference = "Stop"
@@ -279,5 +287,24 @@ if ($InstallConfig) {
 Write-Host "Smoke-testing '$GuestProgram' ..."
 Invoke-Wsl "'$GuestProgram' < /dev/null && echo 'daemon OK'"
 
+if (-not $SkipClient) {
+    $windowsCargo = Get-Command cargo -ErrorAction SilentlyContinue
+    if (-not $windowsCargo) {
+        throw "cargo was not found on Windows; install Rust or rerun with -SkipClient"
+    }
+    $clientBuildDir = Join-Path $env:LOCALAPPDATA "ate\build"
+    Write-Host "Building Windows tool-management CLI ..."
+    & cargo build --manifest-path (Join-Path $root "Cargo.toml") --release -p ate-cli --target-dir $clientBuildDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "building ate-cli on Windows failed with code $LASTEXITCODE"
+    }
+    New-Item -ItemType Directory -Force -Path $ClientInstallDir | Out-Null
+    Copy-Item -Force (Join-Path $clientBuildDir "release\ate.exe") (Join-Path $ClientInstallDir "ate.exe")
+    Write-Host "Installed Windows CLI to $(Join-Path $ClientInstallDir 'ate.exe')"
+}
+
 Write-Host "Done. The Windows client connects with:"
 Write-Host "  WslClientConfig { distribution: `"$Distribution`", guest_program: `"$GuestProgram`" }"
+if (-not $SkipClient) {
+    Write-Host "Add '$ClientInstallDir' to PATH to run: ate tool list --distribution $Distribution"
+}

@@ -29,7 +29,7 @@
 //! use executor_tools::register_core_tools;
 //!
 //! let mut registry = ToolRegistry::new();
-//! register_core_tools(&mut registry);
+//! register_core_tools(&mut registry).unwrap();
 //! let tools = registry.list(); // six descriptors, ready for discovery
 //! ```
 //!
@@ -56,20 +56,21 @@ pub use shared::{
 };
 pub use web_fetch::WebFetchTool;
 
-use executor_core::ToolRegistry;
+use executor_core::{RegistryError, ToolRegistry};
 
 /// Register every built-in tool with the executor's [`ToolRegistry`].
 ///
 /// The `Read`/`Write`/`Edit` tools share one file-read state so the write
 /// guard works across the whole session.
-pub fn register_core_tools(registry: &mut ToolRegistry) {
+pub fn register_core_tools(registry: &mut ToolRegistry) -> Result<(), RegistryError> {
     let read_file_state = FileReadState::default();
-    registry.register(FileReadTool::new(read_file_state.clone()));
-    registry.register(FileWriteTool::new(read_file_state.clone()));
-    registry.register(FileEditTool::new(read_file_state.clone()));
-    registry.register(GlobTool);
-    registry.register(GrepTool::default());
-    registry.register(WebFetchTool::new());
+    registry.register(FileReadTool::new(read_file_state.clone()))?;
+    registry.register(FileWriteTool::new(read_file_state.clone()))?;
+    registry.register(FileEditTool::new(read_file_state.clone()))?;
+    registry.register(GlobTool)?;
+    registry.register(GrepTool::default())?;
+    registry.register(WebFetchTool::new())?;
+    Ok(())
 }
 
 /// Test helpers shared by the built-in tool unit tests.

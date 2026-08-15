@@ -177,8 +177,9 @@ where
                     found,
                 });
             }
-            ClientMessage::ListTools => {
+            ClientMessage::ListTools { request_id } => {
                 let _ = responses.send(ServerMessage::Tools {
+                    request_id,
                     tools: tools.clone(),
                 });
             }

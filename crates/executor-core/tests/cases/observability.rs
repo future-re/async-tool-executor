@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[tokio::test]
 async fn progress_uses_the_optional_observer() {
     let mut tools = ToolRegistry::new();
-    tools.register(ProgressTool);
+    tools.register(ProgressTool).unwrap();
     let observer = Arc::new(MemoryObserver::default());
     let executor = ToolExecutor::new(tools, config(1)).with_observer(observer.clone());
 
@@ -30,7 +30,7 @@ async fn progress_uses_the_optional_observer() {
 async fn failures_are_recorded_without_argument_values() {
     let observer = Arc::new(MemoryObserver::default());
     let mut tools = ToolRegistry::new();
-    tools.register(FailingTool);
+    tools.register(FailingTool).unwrap();
     let executor = ToolExecutor::new(tools, config(1)).with_observer(observer.clone());
     let mut failing = request("failure", "fail");
     failing.arguments = serde_json::json!({"secret": "do-not-record"});

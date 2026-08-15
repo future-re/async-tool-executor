@@ -2,7 +2,7 @@ use crate::{ExecutionRequest, ExecutionResult, ToolDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Messages sent from the Windows agent to the WSL executor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -18,7 +18,9 @@ pub enum ClientMessage {
     Cancel {
         execution_id: String,
     },
-    ListTools,
+    ListTools {
+        request_id: String,
+    },
     Shutdown,
 }
 
@@ -67,6 +69,7 @@ pub enum ServerMessage {
         found: bool,
     },
     Tools {
+        request_id: String,
         tools: Vec<ToolDescriptor>,
     },
     Failed {

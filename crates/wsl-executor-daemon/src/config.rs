@@ -22,6 +22,14 @@ pub struct DaemonConfig {
     pub limits: Option<ResourceLimits>,
     /// Whether the shell tool requires the exclusive execution slot.
     pub exclusive: Option<bool>,
+    /// Whether installed external plugins are discovered for new sessions.
+    pub plugins_enabled: Option<bool>,
+    /// Plugin installation root. Defaults to ~/.local/share/ate/plugins.
+    pub plugin_dir: Option<PathBuf>,
+    /// Maximum time allowed for a plugin handshake.
+    pub plugin_start_timeout_ms: Option<u64>,
+    /// Grace period after cancellation before the plugin process is killed.
+    pub plugin_cancel_grace_ms: Option<u64>,
 }
 
 /// Resolves the configuration: `--config` argument, then `ATE_CONFIG`, then
@@ -76,12 +84,16 @@ fn find_path() -> Result<Option<PathBuf>, ConfigError> {
 /// absolute path. `wsl.exe --exec` inherits a mangled Windows profile value
 /// (e.g. `C:Usersfutur`) for `HOME`, so a non-absolute `HOME` is ignored in
 /// favour of the passwd entry, which always yields a real Linux home.
-fn home_dir() -> Option<PathBuf> {
+pub fn home_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     match home {
         Some(path) if path.is_absolute() => Some(path),
         _ => unix_passwd_home().or(home),
     }
+}
+
+pub fn default_plugin_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".local/share/ate/plugins"))
 }
 
 /// Queries the passwd database for the current user's home directory via

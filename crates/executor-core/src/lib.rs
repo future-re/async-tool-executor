@@ -22,5 +22,5 @@ pub use error::ExecutionError;
 pub use executor::ToolExecutor;
 pub use executor_protocol::{ExecutionRequest, ExecutionResult, ToolDescriptor};
 pub use observer::{ExecutionEvent, ExecutionObserver, ProgressReporter};
-pub use registry::ToolRegistry;
+pub use registry::{RegistryError, ToolRegistry};
 pub use tool::{Tool, ToolContext, ToolDefinition, ToolOutput};

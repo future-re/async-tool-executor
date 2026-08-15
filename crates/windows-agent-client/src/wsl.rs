@@ -2,10 +2,11 @@ use crate::{ClientError, ExecutionClient, WslClientConfig};
 use async_trait::async_trait;
 use executor_protocol::{
     ClientMessage, DEFAULT_MAX_FRAME_SIZE, ExecutionRequest, ExecutionResult, PROTOCOL_VERSION,
-    ServerMessage, read_frame, write_frame,
+    ServerMessage, ToolDescriptor, read_frame, write_frame,
 };
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::process::{Child, Command};
@@ -14,11 +15,14 @@ use tokio::task::JoinHandle;
 
 type PendingResult = oneshot::Sender<Result<ExecutionResult, ClientError>>;
 type CancelAck = oneshot::Sender<bool>;
+type ToolsAck = oneshot::Sender<Result<Vec<ToolDescriptor>, ClientError>>;
 
 pub struct WslClient {
     requests: mpsc::UnboundedSender<ClientMessage>,
     pending: Arc<Mutex<HashMap<String, PendingResult>>>,
     cancel_acks: Arc<Mutex<HashMap<String, CancelAck>>>,
+    tool_acks: Arc<Mutex<HashMap<String, ToolsAck>>>,
+    next_request_id: AtomicU64,
     child: Child,
     writer_task: JoinHandle<()>,
     reader_task: JoinHandle<()>,
@@ -80,6 +84,8 @@ impl WslClient {
         let reader_pending = Arc::clone(&pending);
         let cancel_acks = Arc::new(Mutex::new(HashMap::<String, CancelAck>::new()));
         let reader_cancel_acks = Arc::clone(&cancel_acks);
+        let tool_acks = Arc::new(Mutex::new(HashMap::<String, ToolsAck>::new()));
+        let reader_tool_acks = Arc::clone(&tool_acks);
         let reader_task = tokio::spawn(async move {
             loop {
                 let message = match read_frame(&mut stdout, DEFAULT_MAX_FRAME_SIZE).await {
@@ -123,6 +129,15 @@ impl WslClient {
                             let _ = sender.send(found);
                         }
                     }
+                    ServerMessage::Tools { request_id, tools } => {
+                        if let Some(sender) = reader_tool_acks
+                            .lock()
+                            .expect("tool ack map poisoned")
+                            .remove(&request_id)
+                        {
+                            let _ = sender.send(Ok(tools));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -143,12 +158,21 @@ impl WslClient {
                 // channel and report `Disconnected` instead of a spurious ack.
                 drop(sender);
             }
+            for (_, sender) in reader_tool_acks
+                .lock()
+                .expect("tool ack map poisoned")
+                .drain()
+            {
+                let _ = sender.send(Err(ClientError::Disconnected));
+            }
         });
 
         Ok(Self {
             requests,
             pending,
             cancel_acks,
+            tool_acks,
+            next_request_id: AtomicU64::new(1),
             child,
             writer_task,
             reader_task,
@@ -211,6 +235,32 @@ impl ExecutionClient for WslClient {
         }
 
         ack_rx.await.map_err(|_| ClientError::Disconnected)
+    }
+
+    async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, ClientError> {
+        let request_id = format!(
+            "tools-{}",
+            self.next_request_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tool_acks
+            .lock()
+            .expect("tool ack map poisoned")
+            .insert(request_id.clone(), ack_tx);
+        if self
+            .requests
+            .send(ClientMessage::ListTools {
+                request_id: request_id.clone(),
+            })
+            .is_err()
+        {
+            self.tool_acks
+                .lock()
+                .expect("tool ack map poisoned")
+                .remove(&request_id);
+            return Err(ClientError::Disconnected);
+        }
+        ack_rx.await.unwrap_or(Err(ClientError::Disconnected))
     }
 }
 

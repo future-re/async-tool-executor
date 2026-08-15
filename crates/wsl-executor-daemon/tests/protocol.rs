@@ -19,8 +19,8 @@ async fn tool_discovery_reports_base_tools_plus_shell() {
         ..NativeShellConfig::default()
     });
     let mut registry = ToolRegistry::new();
-    register_core_tools(&mut registry);
-    registry.register(ShellTool::new(shell));
+    register_core_tools(&mut registry).unwrap();
+    registry.register(ShellTool::new(shell)).unwrap();
     let tools = registry.list();
     let names = tools
         .iter()
@@ -63,15 +63,23 @@ async fn tool_discovery_reports_base_tools_plus_shell() {
         Some(ServerMessage::HelloAck { .. })
     ));
 
-    write_frame(&mut client_write, &ClientMessage::ListTools)
-        .await
-        .unwrap();
+    write_frame(
+        &mut client_write,
+        &ClientMessage::ListTools {
+            request_id: "tools-1".into(),
+        },
+    )
+    .await
+    .unwrap();
     let tools = match read_frame(&mut client_read, DEFAULT_MAX_FRAME_SIZE)
         .await
         .unwrap()
         .unwrap()
     {
-        ServerMessage::Tools { tools } => tools,
+        ServerMessage::Tools { request_id, tools } => {
+            assert_eq!(request_id, "tools-1");
+            tools
+        }
         unexpected => panic!("unexpected daemon response: {unexpected:?}"),
     };
     assert_eq!(
@@ -101,7 +109,7 @@ async fn protocol_request_reaches_the_wsl_executor_and_returns_a_result() {
         ..NativeShellConfig::default()
     });
     let mut registry = ToolRegistry::new();
-    registry.register(ShellTool::new(shell));
+    registry.register(ShellTool::new(shell)).unwrap();
     let tools = registry.list();
     let executor = ToolExecutor::new(
         registry,

@@ -35,14 +35,23 @@ pub struct ToolRegistry {
     tools: HashMap<String, RegisteredTool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RegistryError {
+    #[error("tool `{0}` is already registered")]
+    DuplicateTool(String),
+}
+
 impl ToolRegistry {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn register<T: Tool>(&mut self, tool: T) {
+    pub fn register<T: Tool>(&mut self, tool: T) -> Result<(), RegistryError> {
         let tool: Arc<dyn Tool> = Arc::new(tool);
         let definition = Arc::new(tool.definition());
+        if self.tools.contains_key(&definition.name) {
+            return Err(RegistryError::DuplicateTool(definition.name.clone()));
+        }
         let validator = jsonschema::validator_for(&definition.input_schema)
             .map_err(|error| {
                 tracing::warn!(
@@ -60,6 +69,7 @@ impl ToolRegistry {
                 validator,
             },
         );
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<Arc<dyn Tool>, ExecutionError> {
@@ -86,5 +96,42 @@ impl ToolRegistry {
             .get(name)
             .cloned()
             .ok_or_else(|| ExecutionError::ToolNotFound(name.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ToolContext, ToolOutput};
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    struct NamedTool;
+    #[async_trait]
+    impl Tool for NamedTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "same".into(),
+                description: "test".into(),
+                input_schema: json!({}),
+            }
+        }
+        async fn invoke(
+            &self,
+            _: serde_json::Value,
+            _: ToolContext,
+        ) -> Result<ToolOutput, ExecutionError> {
+            Ok(ToolOutput::text("ok"))
+        }
+    }
+
+    #[test]
+    fn duplicate_registration_is_rejected() {
+        let mut registry = ToolRegistry::new();
+        registry.register(NamedTool).unwrap();
+        assert_eq!(
+            registry.register(NamedTool),
+            Err(RegistryError::DuplicateTool("same".into()))
+        );
     }
 }
