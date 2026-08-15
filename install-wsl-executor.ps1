@@ -24,8 +24,11 @@ Copy crates/wsl-executor-daemon/config.example.json to ~/.config/ate/config.json
 when no config exists yet.
 
 .PARAMETER BuildDir
-Optional CARGO_TARGET_DIR override. Defaults to the repository's target/
-directory so existing Linux build artifacts are reused.
+Optional CARGO_TARGET_DIR override. Defaults to ~/.cache/ate/target inside the
+WSL distribution (a Linux-native path). Keeping WSL builds out of the
+repository's target/ directory avoids mixing Linux and Windows build artifacts,
+which corrupts the shared incremental cache and can crash proc-macro servers
+(e.g. "async_trait: proc macro server error ... exit code: 101").
 
 .EXAMPLE
 .\install-wsl-executor.ps1
@@ -78,18 +81,18 @@ if ($GuestProgram.StartsWith("~/") -or $GuestProgram -eq "~") {
     $GuestProgram = $GuestProgram -replace '^~', $wslHome
 }
 
-Write-Host "Building wsl-executor-daemon inside WSL ($Distribution) from $wslRoot ..."
-if ($BuildDir) {
-    Invoke-Wsl "cd '$wslRoot' && CARGO_TARGET_DIR='$BuildDir' cargo build --release -p wsl-executor-daemon"
-} else {
-    Invoke-Wsl "cd '$wslRoot' && cargo build --release -p wsl-executor-daemon"
+if (-not $BuildDir) {
+    $BuildDir = "$wslHome/.cache/ate/target"
+}
+Write-Host "Build dir (WSL): $BuildDir"
+if (-not $BuildDir.StartsWith("/")) {
+    throw "BuildDir must be an absolute Linux path inside WSL, got: $BuildDir"
 }
 
-if ($BuildDir) {
-    $binary = "$BuildDir/release/wsl-executor-daemon"
-} else {
-    $binary = "target/release/wsl-executor-daemon"
-}
+Write-Host "Building wsl-executor-daemon inside WSL ($Distribution) from $wslRoot ..."
+Invoke-Wsl "cd '$wslRoot' && CARGO_TARGET_DIR='$BuildDir' cargo build --release -p wsl-executor-daemon"
+
+$binary = "$BuildDir/release/wsl-executor-daemon"
 
 Write-Host "Installing guest daemon to $GuestProgram ..."
 Invoke-Wsl "mkdir -p '$wslHome/.local/bin' && install -m 755 '$binary' '$GuestProgram'"
