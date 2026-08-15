@@ -1,4 +1,5 @@
 use executor_core::{ExecutorConfig, ToolExecutor, ToolRegistry};
+use executor_tools::register_core_tools;
 use std::collections::HashMap;
 use std::sync::Arc;
 use wsl_executor_daemon::config::load;
@@ -27,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let mut registry = ToolRegistry::new();
+    register_core_tools(&mut registry);
     let mut tool = ShellTool::new(shell);
     if config.exclusive.unwrap_or(false) {
         tool = tool.exclusive();
