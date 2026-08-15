@@ -118,7 +118,12 @@ impl NativeShell {
     }
 }
 
-fn apply_rlimit(resource: libc::__rlimit_resource_t, value: Option<u64>) -> io::Result<()> {
+#[cfg(target_env = "gnu")]
+type RlimitResource = libc::__rlimit_resource_t;
+#[cfg(not(target_env = "gnu"))]
+type RlimitResource = libc::c_int;
+
+fn apply_rlimit(resource: RlimitResource, value: Option<u64>) -> io::Result<()> {
     let Some(value) = value else {
         return Ok(());
     };

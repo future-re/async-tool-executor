@@ -49,7 +49,24 @@ progress events, terminal results and graceful shutdown.
 The daemon is launched per connection by the Windows client, so installing it
 means placing the binary at a fixed path and pointing the client at it.
 
-Build a release binary and install it (assumes you are already in WSL):
+Run `install-wsl-executor.ps1` from Windows; it handles everything:
+
+```powershell
+.\install-wsl-executor.ps1                     # auto-selects build strategy
+.\install-wsl-executor.ps1 -BuildMode cross    # build from Windows, no Rust in WSL
+.\install-wsl-executor.ps1 -InstallConfig      # also install a default config
+```
+
+Two build strategies are supported, selected automatically (`-BuildMode auto`):
+
+- **native** – compiles inside WSL using the distribution's own cargo. Needs a
+  Rust toolchain in WSL; builds with `RUSTUP_TOOLCHAIN=stable` so the repo's
+  `rust-toolchain.toml` pin is not forced into WSL.
+- **cross** – cross-compiles a static musl Linux binary from Windows with
+  `cargo-zigbuild` and copies it in. Requires no Rust inside WSL at all. Use
+  `-CrossTarget gnu` for a dynamically-linked glibc binary instead.
+
+Manually (native build, assumes you are already in WSL):
 
 ```bash
 cargo build --release -p wsl-executor-daemon
