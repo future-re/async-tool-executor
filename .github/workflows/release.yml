@@ -63,9 +63,60 @@ jobs:
           path: ${{ env.asset }}
           if-no-files-found: error
 
+  windows-client:
+    name: Build Windows clients
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build ate-cli and ate-mcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p ate-cli -p ate-mcp --target ${{ matrix.target }}
+
+      - name: Package Windows clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          asset="ate-windows-${tag}-${{ matrix.target }}.zip"
+          stage=".stage-win"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/ate.exe" "$stage/"
+          cp "target/${{ matrix.target }}/release/ate-mcp.exe" "$stage/"
+          tar -a -c -f "$asset" -C "$stage" ate.exe ate-mcp.exe
+          rm -rf "$stage"
+          echo "asset=${asset}" >> "$GITHUB_ENV"
+
+      - name: Verify PE binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          file "target/${{ matrix.target }}/release/ate.exe" | grep -E "PE32"
+          file "target/${{ matrix.target }}/release/ate-mcp.exe" | grep -E "PE32"
+
+      - name: Upload asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-windows-${{ matrix.target }}
+          path: ${{ env.asset }}
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
-    needs: cross-build
+    needs: [cross-build, windows-client]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +131,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t files < <(find assets -name "*.tar.gz" -type f)
+          mapfile -t files < <(find assets -type f \( -name "*.tar.gz" -o -name "*.zip" \))
           echo "files=${#files[@]}"
           printf '%s\n' "${files[@]}"
 
@@ -91,7 +142,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t files < <(find assets -name "*.tar.gz" -type f)
+          mapfile -t files < <(find assets -type f \( -name "*.tar.gz" -o -name "*.zip" \))
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG exists; uploading assets"
             gh release upload "$TAG" "${files[@]}" --clobber

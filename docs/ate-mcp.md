@@ -39,12 +39,12 @@ globally; copy it anywhere you like and point the MCP configuration at it.
 
 ## One-command install
 
-`install-wsl-executor.ps1` builds the daemon, deploys it to WSL, and installs
+`install-ate.ps1` builds the daemon, deploys it to WSL, and installs
 both Windows binaries (`ate.exe` and `ate-mcp.exe`) in one run. Replace the
 placeholders with your own values:
 
 ```powershell
-.\install-wsl-executor.ps1 -Distribution <distro> -InstallConfig -WorkspaceRoot /home/<user>/code
+.\install-ate.ps1 -Distribution <distro> -InstallConfig -WorkspaceRoot /home/<user>/code
 ```
 
 ## Distributing via GitHub Releases
@@ -54,9 +54,11 @@ asset and installed without any compiler. Pushing a tag like `v0.1.0` triggers
 the CI workflow in `.github/workflows/release.yml`, which cross-compiles the
 daemon for **both** `x86_64-unknown-linux-musl` and
 `aarch64-unknown-linux-musl` on GitHub's runners, packages each as
-`ate-daemon-<tag>-<target>.tar.gz`, and uploads both to the Release. The
-correct one is selected automatically at install time from the WSL
-architecture.
+`ate-daemon-<tag>-<target>.tar.gz`, and uploads both to the Release. The same
+workflow builds the Windows clients (`ate.exe`, `ate-mcp.exe`) on
+`windows-latest` and uploads them as `ate-windows-<tag>-<target>.zip`. The
+correct assets are selected automatically at install time from the WSL and
+Windows architectures.
 
 CI handles the build; no local compiler is needed:
 
@@ -77,19 +79,22 @@ Install the prebuilt daemon for the local WSL architecture. The `{arch}`
 placeholder is replaced automatically, so one URL serves every platform:
 
 ```powershell
-.\install-wsl-executor.ps1 -ReleaseUrl "https://github.com/<owner>/<repo>/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz" -InstallConfig -WorkspaceRoot /home/<user>/code
+.\install-ate.ps1 -ReleaseUrl "https://github.com/<owner>/<repo>/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz" -InstallConfig -WorkspaceRoot /home/<user>/code
 ```
 
 Or let the script build the URL from the repository and tag:
 
 ```powershell
-.\install-wsl-executor.ps1 -Repo <owner>/<repo> -ReleaseTag v0.1.0 -InstallConfig -WorkspaceRoot /home/<user>/code
+.\install-ate.ps1 -Repo <owner>/<repo> -ReleaseTag v0.1.0 -InstallConfig -WorkspaceRoot /home/<user>/code
 ```
 
 The `-ReleaseUrl` / `-Repo` forms need no Rust toolchain, no `cargo-zigbuild`,
-and no `zig` on the target machine. The script detects the WSL architecture
-via `uname -m` and maps it to a Rust target (`x86_64` → musl x86_64,
-`aarch64`/`arm64` → musl aarch64).
+and no `zig` on the target machine: the daemon is downloaded and the Windows
+clients (`ate.exe`, `ate-mcp.exe`) are downloaded too, so nothing is compiled.
+The script detects the WSL architecture via `uname -m` and maps it to a Rust
+target (`x86_64` → musl x86_64, `aarch64`/`arm64` → musl aarch64); the Windows
+host architecture comes from the environment and maps to `x86_64-pc-windows-msvc`
+or `aarch64-pc-windows-msvc`.
 
 ## Configuration
 

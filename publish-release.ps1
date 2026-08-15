@@ -9,11 +9,13 @@ aarch64-unknown-linux-musl from Windows using cargo-zigbuild (no Rust
 toolchain needed inside WSL), packages each static binary into its own tar.gz
 asset, and uploads them to a GitHub Release with gh.
 
-The resulting assets are consumed by install-wsl-executor.ps1 -ReleaseUrl
+The resulting assets are consumed by install-ate.ps1 -ReleaseUrl
 (where the {arch} placeholder selects the right one) so other machines install
 the prebuilt daemon without compiling or installing cargo-zigbuild / Zig
-themselves. GitHub CI (.github/workflows/release.yml) does the same build
-automatically on every v* tag push.
+themselves. The Windows clients (ate.exe, ate-mcp.exe) are built and packaged
+into a ate-windows-<tag>-<target>.zip asset consumed by install-ate.ps1
+-ClientReleaseUrl. GitHub CI (.github/workflows/release.yml) does the same
+build automatically on every v* tag push.
 
 Requires on the Windows host:
   - Rust toolchain (cargo + rustup)
@@ -161,6 +163,35 @@ foreach ($target in $targetList) {
     $assets += $assetPath
 }
 
+# --- Windows clients --------------------------------------------------------
+$winArch = $env:PROCESSOR_ARCHITEW6432
+if (-not $winArch) { $winArch = $env:PROCESSOR_ARCHITECTURE }
+$winRustTarget = switch -Regex ($winArch) {
+    "^(ARM64|Arm64|arm64)$" { "aarch64-pc-windows-msvc" }
+    default                 { "x86_64-pc-windows-msvc" }
+}
+Write-Host "Building Windows clients (ate-cli, ate-mcp) for $winRustTarget ..."
+cargo build --release -p ate-cli -p ate-mcp --target $winRustTarget
+if ($LASTEXITCODE -ne 0) { throw "cargo build (Windows clients) failed with exit code $LASTEXITCODE" }
+
+$winAssetBase = "ate-windows-$Tag-$winRustTarget"
+$winAssetPath = Join-Path $OutDir "$winAssetBase.zip"
+$stage = Join-Path $env:TEMP "ate-win-stage-$PID"
+New-Item -ItemType Directory -Path $stage -Force | Out-Null
+try {
+    Copy-Item -Force (Join-Path $BuildDir "$winRustTarget\release\ate.exe") (Join-Path $stage "ate.exe")
+    Copy-Item -Force (Join-Path $BuildDir "$winRustTarget\release\ate-mcp.exe") (Join-Path $stage "ate-mcp.exe")
+    Write-Host "Packaging $winAssetPath ..."
+    Compress-Archive -Path (Join-Path $stage "ate.exe"), (Join-Path $stage "ate-mcp.exe") -DestinationPath $winAssetPath -Force
+}
+finally {
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+}
+if (-not (Test-Path -LiteralPath $winAssetPath)) { throw "failed to create $winAssetPath" }
+$winBytes = (Get-Item -LiteralPath $winAssetPath).Length
+Write-Host "Created $winAssetPath ($([math]::Round($winBytes/1MB, 2)) MB)"
+$assets += $winAssetPath
+
 # --- publish --------------------------------------------------------------
 $notesArg = @()
 if ($ReleaseNotes) {
@@ -184,4 +215,4 @@ Write-Host "  tag:    $Tag"
 foreach ($asset in $assets) { Write-Host "  asset:  $asset" }
 Write-Host ""
 Write-Host "Install on another machine with:"
-Write-Host "  .\install-wsl-executor.ps1 -Repo $TargetRepo -ReleaseTag $Tag"
+Write-Host "  .\install-ate.ps1 -Repo $TargetRepo -ReleaseTag $Tag"

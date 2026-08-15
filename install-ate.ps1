@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-Builds and installs the WSL executor daemon, with no Rust required inside WSL.
+Builds or downloads the WSL executor daemon and installs it, together with the
+Windows client (ate.exe CLI and ate-mcp.exe MCP server).
 
 .DESCRIPTION
 Installs wsl-executor-daemon into a WSL distribution using two build
-strategies, selected automatically:
+strategies, selected automatically, and installs the Windows client binaries:
 
   native - compile inside WSL with the distribution's own cargo. Fastest, but
            requires the Rust toolchain to be installed in WSL. The build forces
@@ -21,6 +22,10 @@ BuildMode auto uses native when WSL already has cargo, otherwise falls back to
 cross. Cross artifacts go to an isolated CARGO_TARGET_DIR so they never mix
 with the repository's target/ (mixing Linux/Windows artifacts corrupts the
 shared incremental cache and crashes proc-macro servers).
+
+When -ReleaseUrl / -ClientReleaseUrl (or -Repo + -ReleaseTag) is given, both
+the daemon and the Windows clients are downloaded from a GitHub Release, so no
+compiler is needed anywhere: no Rust in WSL and no Rust on Windows.
 
 All Linux-side paths are resolved to absolute paths: the WSL home directory is
 queried up front (bash expands `~` from the passwd database) and any `~`
@@ -78,6 +83,14 @@ naming scheme; -ReleaseUrl overrides this.
 .PARAMETER ReleaseTag
 Release tag to fetch when -Repo is set, e.g. "v0.1.0".
 
+.PARAMETER ClientReleaseUrl
+Download URL of a prebuilt Windows client zip from a GitHub Release. When set
+(alone, or derived automatically from -Repo + -ReleaseTag), ate.exe and
+ate-mcp.exe are downloaded instead of compiled, so no Rust toolchain is needed
+on Windows. The placeholder `{arch}` is replaced with the Windows host's Rust
+target (e.g. `x86_64-pc-windows-msvc`); the archive must contain both `ate.exe`
+and `ate-mcp.exe`.
+
 .PARAMETER SkipClient
 Skip building and installing the Windows ate.exe tool-management CLI and the
 ate-mcp.exe MCP server.
@@ -87,11 +100,12 @@ Windows destination for ate.exe and ate-mcp.exe. Defaults to
 %LOCALAPPDATA%\ate\bin.
 
 .EXAMPLE
-.\install-wsl-executor.ps1
-.\install-wsl-executor.ps1 -Distribution Ubuntu -InstallConfig
-.\install-wsl-executor.ps1 -BuildMode cross -InstallTools
-.\install-wsl-executor.ps1 -ReleaseUrl "https://github.com/owner/repo/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz"
-.\install-wsl-executor.ps1 -Repo owner/repo -ReleaseTag v0.1.0
+.\install-ate.ps1
+.\install-ate.ps1 -Distribution Ubuntu -InstallConfig
+.\install-ate.ps1 -BuildMode cross -InstallTools
+.\install-ate.ps1 -ReleaseUrl "https://github.com/owner/repo/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz"
+.\install-ate.ps1 -Repo owner/repo -ReleaseTag v0.1.0
+.\install-ate.ps1 -Repo owner/repo -ReleaseTag v0.1.0 -InstallConfig -WorkspaceRoot /home/me/code
 #>
 [CmdletBinding()]
 param(
@@ -106,6 +120,7 @@ param(
     [switch]$InstallTools,
     [string]$BuildDir,
     [string]$ReleaseUrl,
+    [string]$ClientReleaseUrl,
     [string]$Repo,
     [string]$ReleaseTag,
     [switch]$SkipClient,
@@ -230,6 +245,9 @@ if (-not $ReleaseUrl) {
     if ($Repo -and $ReleaseTag) {
         $ReleaseUrl = "https://github.com/$Repo/releases/download/$ReleaseTag/ate-daemon-$ReleaseTag-{arch}.tar.gz"
     }
+}
+if (-not $ClientReleaseUrl -and $Repo -and $ReleaseTag) {
+    $ClientReleaseUrl = "https://github.com/$Repo/releases/download/$ReleaseTag/ate-windows-$ReleaseTag-{arch}.zip"
 }
 
 if ($ReleaseUrl) {
@@ -376,28 +394,62 @@ Write-Host "Smoke-testing '$GuestProgram' ..."
 Invoke-Wsl "'$GuestProgram' ensure-running >/dev/null && '$GuestProgram' status >/dev/null && echo 'daemon OK'"
 
 if (-not $SkipClient) {
-    $windowsCargo = Get-Command cargo -ErrorAction SilentlyContinue
-    if (-not $windowsCargo) {
-        throw "cargo was not found on Windows; install Rust or rerun with -SkipClient"
-    }
-    $clientBuildDir = Join-Path $env:LOCALAPPDATA "ate\build"
     New-Item -ItemType Directory -Force -Path $ClientInstallDir | Out-Null
 
-    Write-Host "Building Windows tool-management CLI (ate.exe) ..."
-    & cargo build --manifest-path (Join-Path $root "Cargo.toml") --release -p ate-cli --target-dir $clientBuildDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "building ate-cli on Windows failed with code $LASTEXITCODE"
+    if ($ClientReleaseUrl) {
+        $winArch = $env:PROCESSOR_ARCHITEW6432
+        if (-not $winArch) { $winArch = $env:PROCESSOR_ARCHITECTURE }
+        $winTarget = switch -Regex ($winArch) {
+            "^(ARM64|Arm64|arm64)$" { "aarch64-pc-windows-msvc" }
+            default                { "x86_64-pc-windows-msvc" }
+        }
+        if ($ClientReleaseUrl.Contains("{arch}")) {
+            $ClientReleaseUrl = $ClientReleaseUrl.Replace("{arch}", $winTarget)
+        }
+        Write-Host "Windows architecture: $winArch (target: $winTarget)"
+        Write-Host "Downloading prebuilt Windows clients from $ClientReleaseUrl ..."
+        $clientZip = Join-Path $env:TEMP "ate-client-release-$PID.zip"
+        $clientExtract = Join-Path $env:TEMP "ate-client-release-$PID"
+        try {
+            Invoke-WebRequest -Uri $ClientReleaseUrl -OutFile $clientZip -TimeoutSec 300
+            New-Item -ItemType Directory -Path $clientExtract -Force | Out-Null
+            Expand-Archive -Path $clientZip -DestinationPath $clientExtract -Force
+            foreach ($name in @("ate.exe", "ate-mcp.exe")) {
+                $src = Join-Path $clientExtract $name
+                if (-not (Test-Path -LiteralPath $src)) {
+                    throw "client archive does not contain '$name'"
+                }
+                Copy-Item -Force $src (Join-Path $ClientInstallDir $name)
+                Write-Host "Installed Windows CLI to $(Join-Path $ClientInstallDir $name)"
+            }
+        }
+        catch {
+            throw "failed to fetch Windows client release: $_"
+        }
     }
-    Copy-Item -Force (Join-Path $clientBuildDir "release\ate.exe") (Join-Path $ClientInstallDir "ate.exe")
-    Write-Host "Installed Windows CLI to $(Join-Path $ClientInstallDir 'ate.exe')"
+    else {
+        $windowsCargo = Get-Command cargo -ErrorAction SilentlyContinue
+        if (-not $windowsCargo) {
+            throw "cargo was not found on Windows; install Rust or rerun with -SkipClient (or pass -ClientReleaseUrl to download prebuilt clients)"
+        }
+        $clientBuildDir = Join-Path $env:LOCALAPPDATA "ate\build"
 
-    Write-Host "Building Windows MCP server (ate-mcp.exe) ..."
-    & cargo build --manifest-path (Join-Path $root "Cargo.toml") --release -p ate-mcp --target-dir $clientBuildDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "building ate-mcp on Windows failed with code $LASTEXITCODE"
+        Write-Host "Building Windows tool-management CLI (ate.exe) ..."
+        & cargo build --manifest-path (Join-Path $root "Cargo.toml") --release -p ate-cli --target-dir $clientBuildDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "building ate-cli on Windows failed with code $LASTEXITCODE"
+        }
+        Copy-Item -Force (Join-Path $clientBuildDir "release\ate.exe") (Join-Path $ClientInstallDir "ate.exe")
+        Write-Host "Installed Windows CLI to $(Join-Path $ClientInstallDir 'ate.exe')"
+
+        Write-Host "Building Windows MCP server (ate-mcp.exe) ..."
+        & cargo build --manifest-path (Join-Path $root "Cargo.toml") --release -p ate-mcp --target-dir $clientBuildDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "building ate-mcp on Windows failed with code $LASTEXITCODE"
+        }
+        Copy-Item -Force (Join-Path $clientBuildDir "release\ate-mcp.exe") (Join-Path $ClientInstallDir "ate-mcp.exe")
+        Write-Host "Installed Windows MCP server to $(Join-Path $ClientInstallDir 'ate-mcp.exe')"
     }
-    Copy-Item -Force (Join-Path $clientBuildDir "release\ate-mcp.exe") (Join-Path $ClientInstallDir "ate-mcp.exe")
-    Write-Host "Installed Windows MCP server to $(Join-Path $ClientInstallDir 'ate-mcp.exe')"
 
     Write-Host ""
     Write-Host "opencode.json MCP entry (substitute your WSL workspace):"

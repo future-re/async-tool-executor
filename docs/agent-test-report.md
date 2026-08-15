@@ -193,7 +193,7 @@ the handle before connecting to the daemon. Verified end-to-end reads via MCP.
 **Symptom**: garbled directories repeatedly appeared in the project root
 (e.g. `?home?alin?.local?bin`, `C：Usersfutur`).
 
-**Root cause**: `install-wsl-executor.ps1` used PowerShell `Split-Path -Parent`
+**Root cause**: `install-ate.ps1` used PowerShell `Split-Path -Parent`
 to compute the WSL install dir, converting the Linux path
 `/home/alin/.local/bin/ate-daemon` to backslash form (`\home\alin\.local\bin`);
 the backslashes were then mangled by the `wsl.exe bash -lc` bootstrap, creating

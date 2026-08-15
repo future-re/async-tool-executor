@@ -117,13 +117,13 @@ a file lock to serialize concurrent starts.
 The Windows client uses a short `wsl.exe ... ensure-running` call to start or
 discover the daemon, then keeps a TCP connection open for the workspace session.
 
-Run `install-wsl-executor.ps1` from Windows; it handles everything:
+Run `install-ate.ps1` from Windows; it handles everything:
 
 ```powershell
-.\install-wsl-executor.ps1                     # auto-selects build strategy
-.\install-wsl-executor.ps1 -BuildMode cross    # build from Windows, no Rust in WSL
-.\install-wsl-executor.ps1 -InstallConfig      # also install a default config
-.\install-wsl-executor.ps1 -InstallConfig -WorkspaceRoot /home/me/code
+.\install-ate.ps1                     # auto-selects build strategy
+.\install-ate.ps1 -BuildMode cross    # build from Windows, no Rust in WSL
+.\install-ate.ps1 -InstallConfig      # also install a default config
+.\install-ate.ps1 -InstallConfig -WorkspaceRoot /home/me/code
 ```
 
 Two build strategies are supported, selected automatically (`-BuildMode auto`):
@@ -199,8 +199,8 @@ cross-compiles `x86_64` and `aarch64` musl builds and uploads them. The
 install script detects the WSL architecture and fetches the matching asset:
 
 ```powershell
-.\install-wsl-executor.ps1 -Repo <owner>/<repo> -ReleaseTag v0.1.0
-.\install-wsl-executor.ps1 -ReleaseUrl "https://github.com/<owner>/<repo>/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz"
+.\install-ate.ps1 -Repo <owner>/<repo> -ReleaseTag v0.1.0
+.\install-ate.ps1 -ReleaseUrl "https://github.com/<owner>/<repo>/releases/download/v0.1.0/ate-daemon-v0.1.0-{arch}.tar.gz"
 ```
 
 `publish-release.ps1` publishes from a local Windows machine instead of CI.
